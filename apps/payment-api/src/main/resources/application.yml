@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: payment-api
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/p2p_lab}
+    username: ${DB_USERNAME:p2p_lab}
+    password: ${DB_PASSWORD:local_dev_only}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
