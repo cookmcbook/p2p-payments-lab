@@ -51,9 +51,14 @@ Packages under `apps/payment-api/src/main/java/dev/p2plab/payments/`. Dependenci
 | `.../test/.../api/CapabilitiesControllerTest.java` | Capabilities contract | No DB |
 | `apps/payment-api/Dockerfile` | Multi-stage Maven/JRE image | Builds JAR (tests skipped; CI runs them) and runs as non-root |
 | `compose.yaml` | Local API + PostgreSQL 16 | Waits for DB health before starting API |
-| `.github/workflows/ci.yml` | CI | `mvn verify` (GitHub runners provide Docker for Testcontainers) and Docker image build |
+| `.github/workflows/ci.yml` | CI | Three jobs: `test` (`mvn verify`; GitHub runners provide Docker for Testcontainers), `textbook` (`check-snippets.mjs`), `docker` (image build) |
+| `docs/book/index.html` | Interactive textbook ([ADR 0003](adr/0003-interactive-textbook.md)): all chapters as hash-routed views, with code tours, tracers, playgrounds, quizzes and the glossary | Static; open from disk or any static host. Code excerpts must match their `data-source` files |
+| `docs/book/book.js` | Enhances declarative components: router, code tours, tracer animation, quizzes (`localStorage` progress), glossary pop-ups, and Chapter 2 playgrounds (money, API simulator, defense in depth, microsecond bug) | Loads Prism 1.29.0 from cdnjs for highlighting; works without it |
+| `docs/book/book.css` | Theme tokens (light and dark) and component styles | — |
+| `docs/book/tools/check-snippets.mjs` | Node script, no dependencies: verifies excerpts, tour anchors, glossary links, tracer JSON and quiz answers | Run by CI `textbook` job; exits 1 on any drift |
 | `docs/adr/0001-modular-monolith.md` | Monolith rationale | — |
 | `docs/adr/0002-money-and-balance-representation.md` | Minor units; derived balances; no seed funds | — |
+| `docs/adr/0003-interactive-textbook.md` | Static HTML book verified in CI | — |
 | `docs/chapters/02-accounts.md` | Chapter 2 textbook | Walkthrough of this slice |
 
 ## Request traces

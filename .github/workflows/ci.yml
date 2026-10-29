@@ -19,6 +19,15 @@ jobs:
           cache-dependency-path: apps/payment-api/pom.xml
       - name: Unit tests and packaging
         run: mvn --batch-mode verify
+  textbook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify textbook excerpts match the code
+        run: node docs/book/tools/check-snippets.mjs
   docker:
     runs-on: ubuntu-latest
     steps:

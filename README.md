@@ -4,7 +4,7 @@ An educational, **fictional** Zelle-style payment platform. No connection to Zel
 
 ## Start here
 
-Read [the learning guide](docs/LEARNING_GUIDE.md), then [Chapter 1](docs/chapters/01-foundations.md). Follow [AGENTS.md](AGENTS.md) when working with a coding agent.
+Open the **interactive textbook** at [docs/book/index.html](docs/book/index.html) in a browser. It has annotated code tours, animated request traces, playgrounds and quizzes. The plain-text chapters are in [docs/chapters/](docs/chapters/), and [the learning guide](docs/LEARNING_GUIDE.md) explains how to study. Follow [AGENTS.md](AGENTS.md) when working with a coding agent.
 
 ## Prerequisites
 
