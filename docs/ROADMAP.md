@@ -1,7 +1,7 @@
 # Roadmap (planned, not implemented unless marked)
 
 - [x] Chapter 1 — Monorepo, Spring Boot health/capabilities endpoints, Docker Compose, PostgreSQL, Flyway baseline, CI.
-- [ ] Chapter 2 — Accounts, migrations, persistence, Testcontainers.
+- [x] Chapter 2 — Accounts, migrations, persistence, read-only (zero) balances, Testcontainers.
 - [ ] Chapter 3 — Double-entry ledger, posting invariants, concurrency tests.
 - [ ] Chapter 4 — Payment API, lifecycle, request validation, idempotency.
 - [ ] Chapter 5 — Authentication, authorization, payer ownership.

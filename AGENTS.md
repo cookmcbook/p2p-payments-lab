@@ -11,9 +11,10 @@ You are implementing an educational, fictional peer-to-peer payments platform. Y
 5. Add tests at the correct level (unit, integration, contract); run available verification and report exactly what did/did not run.
 6. Update docs/ARCHITECTURE.md **in the same commit** whenever a significant package, class, API, database table, migration, event, dependency, infrastructure component, or CI workflow changes. Document each important file's path, purpose, dependencies, and role in a request lifecycle.
 7. Add/update a numbered chapter in docs/chapters/ explaining: learning objectives; conceptual model; design tradeoffs; annotated code paths; request walkthrough; failure scenarios; exercises with expected observations; and review questions. Explain terminology before using it.
-8. Record nontrivial design decisions in docs/adr/ using context, decision, alternatives, consequences.
-9. Commit a cohesive, verified change using conventional commits (`feat:`, `test:`, `docs:`, `build:`, `ci:`, `refactor:`). Never commit broken intermediate states or secrets. Never claim a test passed without running it.
-10. End each milestone with a handoff: commit SHA, what changed, how to run, tests/results, limitations, and next chapter.
+8. Add/update the chapter's view in the interactive textbook (docs/book/index.html, see ADR 0003) in the same commit: at least one code tour of the chapter's key files, one tracer or playground for its central mechanism, predict-then-reveal exercises, and a quiz of at least six questions, each with an explanation. Record simulator responses from the running service, not from memory. Run `node docs/book/tools/check-snippets.mjs`; a code change that breaks a book excerpt must update the book.
+9. Record nontrivial design decisions in docs/adr/ using context, decision, alternatives, consequences.
+10. Commit a cohesive, verified change using conventional commits (`feat:`, `test:`, `docs:`, `build:`, `ci:`, `refactor:`). Never commit broken intermediate states or secrets. Never claim a test passed without running it.
+11. End each milestone with a handoff: commit SHA, what changed, how to run, tests/results, limitations, and next chapter.
 
 ## Architecture rules
 

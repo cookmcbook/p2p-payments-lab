@@ -1,0 +1,1046 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>P2P Payments Lab Textbook</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<link rel="stylesheet" href="book.css">
+</head>
+<body>
+<!--
+  The interactive edition of docs/chapters/*.md.
+  Code excerpts inside <figure class="code"> must match the real source file named in data-source;
+  docs/book/tools/check-snippets.mjs enforces this in CI. Edit both in the same commit.
+-->
+<div class="topbar">
+  <b>P2P Payments Lab</b>
+  <button class="btn ghost" type="button" aria-expanded="false" aria-controls="rail">Contents</button>
+</div>
+<div class="shell">
+  <nav class="rail" id="rail" aria-label="Book contents">
+    <a class="brand" href="#home"><span>Living textbook</span><b>P2P Payments Lab</b></a>
+    <ul class="toc">
+      <li><a href="#home"><span class="no">00</span><span>How to use this book</span></a></li>
+      <li><a href="#ch-01"><span class="no">01</span><span>Runnable service</span><span class="score" data-score="ch-01"></span></a></li>
+      <li><a href="#ch-02"><span class="no">02</span><span>Accounts</span><span class="score" data-score="ch-02"></span></a></li>
+      <li><a href="#glossary"><span class="no">Gl</span><span>Glossary</span></a></li>
+    </ul>
+    <ul class="toc pending" aria-label="Planned chapters">
+      <li><span class="toc-planned">03 · Double-entry ledger</span></li>
+      <li><span class="toc-planned">04 · Payments and idempotency</span></li>
+      <li><span class="toc-planned">05 · Authentication</span></li>
+      <li><span class="toc-planned">06 · Kafka and the outbox</span></li>
+    </ul>
+    <div class="rail-foot">
+      <div class="theme-toggle" role="group" aria-label="Theme">
+        <button type="button" data-mode="system">Auto</button>
+        <button type="button" data-mode="light">Light</button>
+        <button type="button" data-mode="dark">Dark</button>
+      </div>
+      <div>Fictional platform. No real money, banks or rails. Quiz answers are saved only in this browser.</div>
+    </div>
+  </nav>
+
+  <main>
+  <!-- ================================================================ HOME -->
+  <section class="view" data-view="home" data-title="">
+    <div class="prose cover">
+      <p class="eyebrow">A living textbook · Java 21 · Spring Boot · PostgreSQL</p>
+      <h1>Moving money without losing a cent</h1>
+      <p class="lede">You will build a fictional peer-to-peer payments platform one tested slice at a time. Each chapter pairs a concept with the real code that implements it, a simulation you can poke at, and a quiz to confirm the idea stuck.</p>
+    </div>
+
+    <div class="ledger" role="table" aria-label="Chapters">
+      <div class="ledger-head" role="row"><span role="columnheader">No.</span><span role="columnheader">Chapter</span><span role="columnheader">Status</span><span role="columnheader">Your quiz</span></div>
+      <a class="ledger-row" role="row" href="#ch-01"><span class="no">01</span><span class="t">From empty repository to runnable service<small>Spring Boot, Docker, Flyway, CI</small></span><span class="pill posted">Posted</span><span class="score" data-score="ch-01"></span></a>
+      <a class="ledger-row" role="row" href="#ch-02"><span class="no">02</span><span class="t">Accounts, and a balance that cannot lie<small>Layers, migrations, minor units, Testcontainers</small></span><span class="pill posted">Posted</span><span class="score" data-score="ch-02"></span></a>
+      <div class="ledger-row" role="row"><span class="no">03</span><span class="t">Double-entry ledger<small>Posting invariants, immutability, concurrency</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
+      <div class="ledger-row" role="row"><span class="no">04</span><span class="t">Payment API and idempotency<small>Lifecycle states, retries, request fingerprints</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
+      <div class="ledger-row" role="row"><span class="no">05</span><span class="t">Authentication and payer ownership<small>Spring Security</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
+      <div class="ledger-row" role="row"><span class="no">06</span><span class="t">Kafka events and the transactional outbox<small>Durable publication, consumer deduplication</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
+      <div class="ledger-row" role="row"><span class="no">07</span><span class="t">Mock interbank adapter and reconciliation<small>Timeouts, indeterminate outcomes</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
+      <div class="ledger-row" role="row"><span class="no">08–09</span><span class="t">Observability, hardening, deployment<small>Incidents, performance, rollback</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
+    </div>
+
+    <div class="prose">
+      <h3>How to study each chapter</h3>
+      <div class="howto">
+        <div><b>Read the model</b><p>Every new term is underlined. Tap it for a definition.</p></div>
+        <div><b>Tour the code</b><p>Step through annotated excerpts of the real source, one idea at a time.</p></div>
+        <div><b>Run the trace</b><p>Watch a request move through the system, then break it on purpose.</p></div>
+        <div><b>Predict, then check</b><p>Exercises hide the expected result until you have committed to a guess.</p></div>
+        <div><b>Take the quiz</b><p>Each answer explains why. Your score shows in the contents.</p></div>
+      </div>
+      <div class="callout">
+        <p><b>Simulations are teaching aids.</b> The tracers and the API console run in your browser and mirror the rules in the Java code. Their responses were recorded from the real API. The code excerpts are checked against the repository on every pull request. To see the real thing, run the commands in each chapter's “Run it yourself” section.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ CHAPTER 1 -->
+  <section class="view" data-view="ch-01" data-title="Chapter 1" hidden>
+    <div class="prose">
+      <p class="eyebrow">Chapter 1</p>
+      <h1>From empty repository to runnable service</h1>
+      <p class="lede">Before an API can move money it has to start, connect to its database, and answer a request. This chapter follows that path and shows why a running service is not the same as a working payments product.</p>
+      <div class="objectives">
+        <span class="label">You will be able to</span>
+        <ul>
+          <li>describe what happens between <code>java -jar</code> and the first HTTP response;</li>
+          <li>explain what a <button class="term" data-term="migration">migration</button> is and why it needs a version;</li>
+          <li>tell a Dockerfile from a Compose file, and a <button class="term" data-term="multi-stage">multi-stage build</button> from a single-stage one;</li>
+          <li>explain why the API openly reports that payments are disabled.</li>
+        </ul>
+      </div>
+
+      <h2 id="c1-model" data-short="Mental model">Mental model</h2>
+      <p>An HTTP API is a long-running process that listens on a port, maps each request to a method, and writes a response. Spring Boot assembles that process for you: it scans your code for components, wires them together with <button class="term" data-term="di">dependency injection</button>, and starts an embedded Tomcat web server.</p>
+      <p>Around that process sit three tools you will use in every chapter:</p>
+      <ul>
+        <li><b>Docker</b> packages the application with its Java runtime into an image, so it runs the same everywhere.</li>
+        <li><b>Docker Compose</b> starts that image next to PostgreSQL, wires up the network and environment variables, and waits until the database is healthy.</li>
+        <li><b><button class="term" data-term="flyway">Flyway</button></b> keeps the database schema under version control, so every environment has the same tables.</li>
+      </ul>
+    </div>
+
+    <div class="prose"><h2 id="c1-startup" data-short="Startup sequence">What happens before the first request</h2></div>
+    <div class="fig tracer">
+      <div class="fig-head"><h4>Startup sequence</h4><div class="chips" aria-label="Scenario"></div></div>
+      <div class="fig-body stage">
+        <ol class="lanes"></ol>
+        <div class="side">
+          <div><span class="label">Command</span><pre class="printout request"></pre></div>
+          <div><span class="label">Log (abridged)</span><pre class="printout" aria-live="polite"></pre></div>
+          <div class="result" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="controls"><div class="row"><button class="btn" type="button">Play</button><button class="btn ghost" type="button">Step</button><button class="btn ghost" type="button">Reset</button></div><span class="progress"></span></div>
+      <script type="application/json">
+      {
+        "lanes": [
+          {"name": "JVM", "detail": "java -jar app.jar"},
+          {"name": "Spring context", "detail": "@SpringBootApplication"},
+          {"name": "Flyway", "detail": "db/migration/*.sql"},
+          {"name": "Hibernate", "detail": "ddl-auto: validate"},
+          {"name": "Tomcat", "detail": ":8080"},
+          {"name": "Actuator", "detail": "/actuator/health"}
+        ],
+        "scenarios": [
+          {"label": "Normal start", "request": "$ docker compose up\n# container runs: java -jar /app/app.jar (as user 'app')",
+           "steps": [
+             {"lane": 0, "text": "The JVM loads the executable JAR built by Maven and calls PaymentApiApplication.main().", "log": "$ java -jar /app/app.jar"},
+             {"lane": 1, "text": "Spring reads application.yml, scans dev.p2plab.payments for components and wires them together.", "log": "Starting PaymentApiApplication using Java 21"},
+             {"lane": 2, "text": "Flyway connects to PostgreSQL and compares db/migration with the flyway_schema_history table. New scripts run in version order.", "log": "Current version of schema \"public\": 2"},
+             {"lane": 3, "text": "Hibernate checks every @Entity against the real tables. It never changes the schema; Flyway owns that.", "log": "Schema \"public\" is up to date. No migration necessary."},
+             {"lane": 4, "text": "Tomcat binds port 8080. From now on the process accepts HTTP requests.", "log": "Tomcat started on port 8080 (http) with context path '/'"},
+             {"lane": 5, "text": "Health checks report UP: the app is alive and its database is reachable.", "log": "Started PaymentApiApplication in 3.314 seconds"}
+           ],
+           "result": {"ok": true, "status": "UP", "summary": "Ready for requests. Payments are still disabled."}},
+          {"label": "PostgreSQL stopped", "request": "$ docker compose stop postgres\n$ docker compose restart payment-api",
+           "steps": [
+             {"lane": 0, "text": "The JVM starts normally. Building the image never needed a database.", "log": "$ java -jar /app/app.jar"},
+             {"lane": 1, "text": "Spring begins wiring components. The DataSource is configured but not yet used.", "log": "Starting PaymentApiApplication using Java 21"},
+             {"lane": 2, "fail": true, "text": "Flyway needs a connection before anything else can run, and there is no database to connect to. Startup aborts here.", "log": "FlywaySqlException: Unable to obtain connection from database"}
+           ],
+           "result": {"ok": false, "status": "Exited", "summary": "Tomcat never started, so nothing listens on 8080. The image is fine; the runtime dependency is missing."}},
+          {"label": "Entity doesn't match schema", "request": "# AccountEntity maps display_name as \"name\"\n$ docker compose up --build",
+           "steps": [
+             {"lane": 0, "text": "The JVM starts.", "log": "$ java -jar /app/app.jar"},
+             {"lane": 1, "text": "Spring wires components.", "log": "Starting PaymentApiApplication using Java 21"},
+             {"lane": 2, "text": "Flyway finds the schema up to date. The SQL is correct.", "log": "Schema \"public\" is up to date. No migration necessary."},
+             {"lane": 3, "fail": true, "text": "Hibernate looks for a column named name in table account and does not find one. It refuses to start rather than fail later on the first query.", "log": "Schema-validation: missing column [name] in table [account]"}
+           ],
+           "result": {"ok": false, "status": "Exited", "summary": "Mapping mistakes are caught at startup, not by a customer. (You will try this in Chapter 2, exercise 3.)"}}
+        ]
+      }
+      </script>
+    </div>
+
+    <div class="prose">
+      <h2 id="c1-code" data-short="Code tour">Code tour</h2>
+      <p>Four files carry the whole chapter. Step through each one with the arrows, or click a highlighted line number.</p>
+    </div>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/PaymentApiApplication.java">
+      <div class="fig-head"><h4>The entry point</h4><span class="path">apps/payment-api/src/main/java/dev/p2plab/payments/PaymentApiApplication.java</span></div>
+<pre class="src">
+@SpringBootApplication
+public class PaymentApiApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(PaymentApiApplication.class, args);
+    }
+}
+</pre>
+      <ol class="notes">
+        <li data-at="@SpringBootApplication"><code>@SpringBootApplication</code> turns on three things: configuration from this class, auto-configuration of libraries found on the classpath (web, JPA, Flyway, Actuator), and component scanning of this package and everything below it.</li>
+        <li data-at="SpringApplication.run"><code>SpringApplication.run</code> builds the application context, runs Flyway, starts Tomcat, and returns only once the app is ready. Everything in the startup trace above happens inside this one call.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/api/CapabilitiesController.java">
+      <div class="fig-head"><h4>A safe first endpoint</h4><span class="path">apps/payment-api/src/main/java/dev/p2plab/payments/api/CapabilitiesController.java</span></div>
+<pre class="src">
+@RestController
+@RequestMapping("/api/v1/payments")
+public class CapabilitiesController {
+    @GetMapping("/capabilities")
+    public Map&lt;String, Object&gt; capabilities() {
+        return Map.of("service", "p2p-payments-lab", "paymentProcessingEnabled", false, "accountsEnabled", true, "chapter", 2);
+    }
+}
+</pre>
+      <ol class="notes">
+        <li data-at="@RestController"><code>@RestController</code> marks this class as an HTTP handler whose return values are written straight to the response body as JSON.</li>
+        <li data-at="@RequestMapping" data-span="4">The class-level <code>/api/v1/payments</code> and method-level <code>/capabilities</code> combine into <code>GET /api/v1/payments/capabilities</code>. The <code>v1</code> lets a future breaking change live at <code>v2</code> without breaking existing clients.</li>
+        <li data-at="paymentProcessingEnabled"><code>paymentProcessingEnabled: false</code> is deliberate. A client or operator that sees a healthy service must not conclude that it can move money. The flag changes only when a chapter actually implements payments.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="yaml" data-source="apps/payment-api/src/main/resources/application.yml">
+      <div class="fig-head"><h4>Configuration</h4><span class="path">apps/payment-api/src/main/resources/application.yml</span></div>
+<pre class="src">
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/p2p_lab}
+    username: ${DB_USERNAME:p2p_lab}
+    password: ${DB_PASSWORD:local_dev_only}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+</pre>
+      <ol class="notes">
+        <li data-at="url:" data-span="3"><code>${DB_URL:default}</code> reads an environment variable and falls back to a local default. Compose sets <code>DB_URL</code> to the <code>postgres</code> service. The password is a throwaway local value; real secrets never go in the repository.</li>
+        <li data-at="ddl-auto: validate"><code>validate</code> means Hibernate only checks that entity classes match the tables. It never creates or alters them. Schema changes go through Flyway migrations, which are reviewed and versioned.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="docker" data-source="apps/payment-api/Dockerfile">
+      <div class="fig-head"><h4>Two-stage image</h4><span class="path">apps/payment-api/Dockerfile</span></div>
+<pre class="src">
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /workspace
+COPY pom.xml .
+RUN mvn -B -q dependency:go-offline
+COPY src ./src
+RUN mvn -B -q -DskipTests package
+
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+RUN groupadd --system app &amp;&amp; useradd --system --gid app app
+COPY --from=build --chown=app:app /workspace/target/payment-api-0.1.0-SNAPSHOT.jar /app/app.jar
+USER app
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+</pre>
+      <ol class="notes">
+        <li data-at="AS build">Stage one, named <code>build</code>, has Maven and a full JDK. It exists only to produce the JAR.</li>
+        <li data-at="COPY pom.xml" data-span="2">Copying <code>pom.xml</code> alone first lets Docker cache downloaded dependencies. Editing Java code later reuses this layer instead of downloading the internet again.</li>
+        <li data-at="-DskipTests">Tests are skipped here because CI runs them separately with a real database. The image build should not need Docker-in-Docker.</li>
+        <li data-at="FROM eclipse-temurin:21-jre">Stage two starts fresh from a JRE-only image. No Maven, no compiler, no source code: less to download and less for an attacker to use.</li>
+        <li data-at="groupadd" data-span="4">Only the JAR is copied across. The process runs as an unprivileged <code>app</code> user, so a compromised app cannot act as root inside the container.</li>
+      </ol>
+    </figure>
+
+    <div class="prose"><h2 id="c1-request" data-short="Request trace">Following one request</h2></div>
+    <div class="fig tracer">
+      <div class="fig-head"><h4>HTTP request lifecycle</h4><div class="chips" aria-label="Scenario"></div></div>
+      <div class="fig-body stage">
+        <ol class="lanes"></ol>
+        <div class="side">
+          <div><span class="label">Request</span><pre class="printout request"></pre></div>
+          <div><span class="label">What the server sees</span><pre class="printout" aria-live="polite"></pre></div>
+          <div class="result" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="controls"><div class="row"><button class="btn" type="button">Play</button><button class="btn ghost" type="button">Step</button><button class="btn ghost" type="button">Reset</button></div><span class="progress"></span></div>
+      <script type="application/json">
+      {
+        "lanes": [
+          {"name": "Client", "detail": "curl"},
+          {"name": "Tomcat", "detail": "embedded web server"},
+          {"name": "DispatcherServlet", "detail": "Spring MVC router"},
+          {"name": "CapabilitiesController", "detail": "your code"},
+          {"name": "Jackson", "detail": "object → JSON"}
+        ],
+        "scenarios": [
+          {"label": "GET capabilities", "request": "GET /api/v1/payments/capabilities",
+           "steps": [
+             {"lane": 0, "text": "curl opens a TCP connection to port 8080 and sends the request line and headers."},
+             {"lane": 1, "text": "Tomcat parses the bytes into an HttpServletRequest and hands it to a worker thread.", "log": "GET /api/v1/payments/capabilities HTTP/1.1"},
+             {"lane": 2, "text": "Spring looks up a handler: GET + /api/v1/payments/capabilities matches capabilities().", "log": "→ CapabilitiesController#capabilities()"},
+             {"lane": 3, "text": "The method builds a Map. No database call, no side effects."},
+             {"lane": 4, "text": "Jackson serializes the Map to JSON and sets Content-Type: application/json.", "log": "{\"paymentProcessingEnabled\":false,\"chapter\":2,...}"},
+             {"lane": 0, "text": "curl prints the body."}
+           ],
+           "result": {"ok": true, "status": "200 OK", "summary": "Discovery works, and it says payments are disabled."}},
+          {"label": "POST /api/v1/payments", "request": "POST /api/v1/payments",
+           "steps": [
+             {"lane": 0, "text": "Someone tries to send a payment."},
+             {"lane": 1, "text": "Tomcat parses the request as usual.", "log": "POST /api/v1/payments HTTP/1.1"},
+             {"lane": 2, "fail": true, "text": "No controller maps this path. Spring falls back to its static-file handler, which finds nothing either.", "log": "No static resource api/v1/payments."},
+             {"lane": 0, "text": "The client gets a problem response instead of a payment."}
+           ],
+           "result": {"ok": false, "status": "404 Not Found", "summary": "There is no payments endpoint yet, by design."}},
+          {"label": "POST capabilities", "request": "POST /api/v1/payments/capabilities",
+           "steps": [
+             {"lane": 0, "text": "The right path with the wrong method."},
+             {"lane": 1, "text": "Tomcat parses the request.", "log": "POST /api/v1/payments/capabilities HTTP/1.1"},
+             {"lane": 2, "fail": true, "text": "The path is mapped, but only for GET. Spring answers 405 and lists what is allowed.", "log": "Method 'POST' is not supported.  (Allow: GET)"},
+             {"lane": 0, "text": "The Allow header tells the client which method would have worked."}
+           ],
+           "result": {"ok": false, "status": "405 Method Not Allowed", "summary": "404 means no such resource; 405 means the resource exists but not for that verb."}}
+        ]
+      }
+      </script>
+    </div>
+
+    <div class="prose">
+      <h2 id="c1-failure" data-short="Failure lab">Failure laboratory</h2>
+      <p>A Docker image that builds is not a service that starts. Building needs only Maven and source code; starting needs a reachable database, valid configuration, and a schema that matches the code. Try the <b>PostgreSQL stopped</b> scenario in the startup trace above, then reproduce it for real:</p>
+      <div class="cmd"><pre>docker compose up -d
+docker compose stop postgres
+docker compose restart payment-api
+docker compose logs payment-api --tail 30
+docker compose start postgres
+docker compose restart payment-api</pre></div>
+
+      <h2 id="c1-run" data-short="Run it yourself">Run it yourself</h2>
+      <div class="cmd"><pre>docker compose up --build
+curl http://localhost:8080/actuator/health
+curl http://localhost:8080/api/v1/payments/capabilities</pre></div>
+      <p>On Windows PowerShell, type <code>curl.exe</code>; plain <code>curl</code> there is an alias for a different command.</p>
+
+      <h2 id="c1-exercises" data-short="Exercises">Exercises</h2>
+      <details class="reveal predict"><summary>What does <code>curl -X POST http://localhost:8080/api/v1/payments</code> return?</summary><div><p><b>404 Not Found</b> with a problem body: <code>"detail":"No static resource api/v1/payments."</code>. Nothing maps that path yet. Compare with <code>POST /api/v1/payments/capabilities</code>, which returns <b>405</b> because that path exists for GET.</p></div></details>
+      <details class="reveal"><summary>Explain the difference between the Dockerfile and compose.yaml</summary><div><p>The Dockerfile describes how to build <em>one image</em>. <code>compose.yaml</code> describes how to <em>run several containers together</em>: which images, which environment variables, which ports, and in what order (the API waits for PostgreSQL's health check).</p></div></details>
+      <details class="reveal"><summary>Which file controls the database schema?</summary><div><p>The SQL files in <code>apps/payment-api/src/main/resources/db/migration/</code>, applied by Flyway. Not Hibernate: <code>ddl-auto: validate</code> only checks.</p></div></details>
+      <details class="reveal"><summary>Add a safe field to the capabilities response</summary><div><p>Add for example <code>"currency", "USD"</code> to the <code>Map.of(...)</code>. The existing <code>CapabilitiesControllerTest</code> still passes, because it checks specific fields, not the whole body. Add an assertion for your new field, run <code>mvn verify</code>, and update this book's code excerpt. The CI snippet check fails if you forget.</p></div></details>
+    </div>
+
+    <div class="prose">
+      <h2 id="c1-quiz" data-short="Quiz">Check your understanding</h2>
+    </div>
+    <div class="quiz" data-quiz="ch-01">
+      <div class="q" data-answer="b">
+        <p class="q-text">What does <code>docker compose up</code> do that <code>docker build</code> alone does not?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Compiles the Java code</button></li>
+          <li><button data-opt="b">Starts the API together with PostgreSQL, with networking, environment variables and start order</button></li>
+          <li><button data-opt="c">Runs the unit tests</button></li>
+          <li><button data-opt="d">Publishes the image to a registry</button></li>
+        </ul>
+        <p class="q-why" hidden>Compose runs a set of containers as one system. Compiling happens inside the Dockerfile's build stage, and tests run in CI.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">Why does every Flyway migration carry a version number?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">So Hibernate can generate the tables</button></li>
+          <li><button data-opt="b">So migrations can be edited safely after release</button></li>
+          <li><button data-opt="c">So each change is applied exactly once, in order, and every database can say which version it is at</button></li>
+          <li><button data-opt="d">Because PostgreSQL requires it</button></li>
+        </ul>
+        <p class="q-why" hidden>Flyway records applied versions in <code>flyway_schema_history</code>. Editing an applied migration is exactly what versioning forbids: Flyway detects the changed checksum and refuses to start.</p>
+      </div>
+      <div class="q" data-answer="a">
+        <p class="q-text">The image built without errors, but the container exits seconds after starting. What is the most likely cause?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">A runtime dependency, such as the database, is unreachable or misconfigured</button></li>
+          <li><button data-opt="b">The Java code did not compile</button></li>
+          <li><button data-opt="c">Port 8080 is missing from the Dockerfile</button></li>
+          <li><button data-opt="d">Tests were skipped during the build</button></li>
+        </ul>
+        <p class="q-why" hidden>A compile error would have failed the build. Startup needs things the build never touched: the database, configuration and a matching schema. <code>EXPOSE</code> is documentation and does not stop a process from starting.</p>
+      </div>
+      <div class="q" data-answer="d">
+        <p class="q-text">What is the main benefit of the second <code>FROM</code> stage in the Dockerfile?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">It makes Maven builds faster</button></li>
+          <li><button data-opt="b">It runs the tests in isolation</button></li>
+          <li><button data-opt="c">It lets the image run without a JVM</button></li>
+          <li><button data-opt="d">The final image carries only a JRE and the JAR, runs as a non-root user, and leaves build tools behind</button></li>
+        </ul>
+        <p class="q-why" hidden>Smaller images download faster and give an attacker fewer tools. The dependency cache layer is what speeds up builds, not the second stage.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">Why does the capabilities endpoint say <code>paymentProcessingEnabled: false</code> instead of omitting the field?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Jackson cannot serialize a missing field</button></li>
+          <li><button data-opt="b">So nobody mistakes a healthy service for one that can move money</button></li>
+          <li><button data-opt="c">It turns off the payment endpoints</button></li>
+          <li><button data-opt="d">It is required by the HTTP standard</button></li>
+        </ul>
+        <p class="q-why" hidden>The flag is informational. There are no payment endpoints to turn off. Its job is to make technical readiness and business readiness visibly different.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">With <code>ddl-auto: validate</code>, what does Hibernate do at startup?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Creates missing tables</button></li>
+          <li><button data-opt="b">Drops and recreates the schema</button></li>
+          <li><button data-opt="c">Checks that entity mappings match the existing tables and refuses to start if they don't</button></li>
+          <li><button data-opt="d">Runs the Flyway migrations</button></li>
+        </ul>
+        <p class="q-why" hidden>Flyway changes the schema; Hibernate only verifies it. Keeping those jobs separate means every schema change is a reviewed SQL file.</p>
+      </div>
+    </div>
+
+    <nav class="chapter-nav prose" aria-label="Chapter navigation">
+      <a href="#home"><small>Back</small>Contents</a>
+      <a class="next" href="#ch-02"><small>Next</small>Chapter 2 · Accounts</a>
+    </nav>
+  </section>
+
+  <!-- ================================================================ CHAPTER 2 -->
+  <section class="view" data-view="ch-02" data-title="Chapter 2" hidden>
+    <div class="prose">
+      <p class="eyebrow">Chapter 2</p>
+      <h1>Accounts, and a balance that cannot lie</h1>
+      <p class="lede">You can now open an account and read its balance. The balance is always zero, and nothing in the system can change it. That restriction is the main lesson of this chapter.</p>
+      <div class="objectives">
+        <span class="label">You will be able to</span>
+        <ul>
+          <li>explain why a balance should be derived from records, not stored as an editable number;</li>
+          <li>represent money without floating point;</li>
+          <li>trace a request through controller, service, domain, repository and database, and say which layer owns which rule;</li>
+          <li>write migration constraints that hold even when application code is bypassed;</li>
+          <li>say what unit, contract and integration tests can and cannot prove.</li>
+        </ul>
+      </div>
+
+      <h2 id="c2-model" data-short="Mental model">Mental model: the statement is the truth</h2>
+      <p>A bank statement is a list of entries with a total at the bottom. If the total and the entries ever disagree, the entries win. In accounting terms, the <button class="term" data-term="ledger-balance">ledger balance</button> is a <button class="term" data-term="read-model">read model</button>: computed from <button class="term" data-term="posting">postings</button>, never typed in.</p>
+      <p>This chapter adopts that rule before any postings exist. The <code>account</code> table has no balance column, no endpoint accepts an amount, and every balance is computed as zero. That is the strongest possible form of “transfers never create funds”: there is no code that could.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Concept</th><th>Exists in Chapter 2?</th><th>Where</th></tr></thead>
+        <tbody>
+          <tr><td>Account: who holds funds</td><td>Yes</td><td><code>account</code> table, <code>Account</code> record</td></tr>
+          <tr><td>Postings: what happened</td><td>No</td><td>Chapter 3</td></tr>
+          <tr><td>Balance: sum of postings</td><td>Yes, always 0</td><td><code>AccountService.balance</code></td></tr>
+          <tr><td>A way to add money</td><td>Deliberately no</td><td>Chapter 3 moves it from a funding account</td></tr>
+        </tbody>
+      </table></div>
+
+      <h2 id="c2-money" data-short="Money">Money is an integer</h2>
+      <p>Most decimal fractions have no exact binary representation. A <code>double</code> stores the closest value it can, and the small errors pile up with every addition. The project stores money as an integer count of the currency's <button class="term" data-term="minor-unit">minor unit</button>: $12.34 is <code>1234</code> cents. Try it below. JavaScript numbers use the same IEEE 754 format as Java's <code>double</code>, so the left side shows exactly what Java would compute.</p>
+    </div>
+
+    <div class="fig" data-playground="money">
+      <div class="fig-head"><h4>double vs. minor units</h4><span class="label">Playground</span></div>
+      <div class="fig-body">
+        <div class="row" style="align-items:flex-end">
+          <label class="field" for="money-amount">Amount in dollars<input type="text" id="money-amount" value="0.10" inputmode="decimal" size="10"></label>
+          <label class="field" for="money-times">Add it this many times<input type="number" id="money-times" value="10" min="1" max="1000000"></label>
+          <div class="chips" aria-label="Examples">
+            <button class="chip" type="button" data-amount="0.10" data-times="10">$0.10 × 10</button>
+            <button class="chip" type="button" data-amount="0.01" data-times="1000000">$0.01 × 1,000,000</button>
+            <button class="chip" type="button" data-amount="19.99" data-times="3">$19.99 × 3</button>
+            <button class="chip" type="button" data-amount="0.07" data-times="100">$0.07 × 100</button>
+          </div>
+        </div>
+        <p class="err" aria-live="polite"></p>
+        <div class="pg-grid">
+          <div class="readout" data-out="double"><span class="label">double sum = 0; sum += amount</span><div class="big"></div><p></p></div>
+          <div class="readout" data-out="cents"><span class="label">long cents = 0; cents += amountMinor</span><div class="big"></div><p></p></div>
+        </div>
+      </div>
+      <p class="fig-cap">Recorded in <a href="https://github.com/cookmcbook/p2p-payments-lab/blob/main/docs/adr/0002-money-and-balance-representation.md">ADR 0002</a>. The tradeoff: <code>long</code> can't hold fractions of a cent, which matters for interest or FX later.</p>
+    </div>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/money/Money.java">
+      <div class="fig-head"><h4>The Money value type</h4><span class="path">apps/payment-api/src/main/java/dev/p2plab/payments/money/Money.java</span></div>
+<pre class="src">
+public record Money(long amountMinor, Currency currency) {
+    public Money {
+        Objects.requireNonNull(currency, "currency");
+    }
+
+    public static Money zero(Currency currency) {
+        return new Money(0, currency);
+    }
+}
+</pre>
+      <ol class="notes">
+        <li data-at="long amountMinor">A <code>long</code> of minor units plus an explicit currency. An amount without a currency is meaningless, so the pair always travels together.</li>
+        <li data-at="requireNonNull" data-span="1">A record's compact constructor runs on every construction. No <code>Money</code> without a currency can exist.</li>
+        <li data-at="zero(Currency" data-span="3">The only factory today. Chapter 3 adds arithmetic using <code>Math.addExact</code>, so overflow fails loudly instead of wrapping around.</li>
+      </ol>
+    </figure>
+
+    <div class="prose">
+      <h2 id="c2-layers" data-short="Layers">Four layers, one direction</h2>
+      <p>The account code lives in four packages. Each has one job, and dependencies only point inward, toward the domain:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Package</th><th>Job</th><th>Must not</th></tr></thead>
+        <tbody>
+          <tr><td><code>account.api</code></td><td>Turn HTTP into method calls and back. Validate input shape.</td><td>Contain business rules or touch the database</td></tr>
+          <tr><td><code>account.application</code></td><td>Run a use case inside a <button class="term" data-term="transaction">transaction</button>.</td><td>Know about HTTP</td></tr>
+          <tr><td><code>account.domain</code></td><td>Hold the rules. Plain Java, no Spring.</td><td>Import JPA or web types</td></tr>
+          <tr><td><code>account.persistence</code></td><td>Implement the repository <button class="term" data-term="port">port</button> with JPA.</td><td>Be visible outside its package</td></tr>
+        </tbody>
+      </table></div>
+      <p>Watch a request cross them. Pick a scenario, press Play, and notice how far each bad request gets.</p>
+    </div>
+
+    <div class="fig tracer">
+      <div class="fig-head"><h4>Request through the account module</h4><div class="chips" aria-label="Scenario"></div></div>
+      <div class="fig-body stage">
+        <ol class="lanes"></ol>
+        <div class="side">
+          <div><span class="label">Request</span><pre class="printout request"></pre></div>
+          <div><span class="label">Server log and SQL</span><pre class="printout" aria-live="polite"></pre></div>
+          <div class="result" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="controls"><div class="row"><button class="btn" type="button">Play</button><button class="btn ghost" type="button">Step</button><button class="btn ghost" type="button">Reset</button></div><span class="progress"></span></div>
+      <script type="application/json">
+      {
+        "lanes": [
+          {"name": "Client", "detail": "curl / app"},
+          {"name": "Tomcat + DispatcherServlet", "detail": "routing"},
+          {"name": "Binding & validation", "detail": "Jackson, @Valid, type conversion"},
+          {"name": "AccountController", "detail": "account.api"},
+          {"name": "AccountService", "detail": "@Transactional"},
+          {"name": "Account", "detail": "account.domain"},
+          {"name": "JpaAccountRepository", "detail": "account.persistence"},
+          {"name": "PostgreSQL", "detail": "V2__accounts.sql"}
+        ],
+        "scenarios": [
+          {"label": "Create an account", "request": "POST /api/v1/accounts\nContent-Type: application/json\n\n{\"displayName\": \"  Alice Example \", \"currency\": \"USD\"}",
+           "steps": [
+             {"lane": 0, "text": "The client sends JSON. Note the stray spaces around the name."},
+             {"lane": 1, "text": "POST /api/v1/accounts matches AccountController.open()."},
+             {"lane": 2, "text": "Jackson builds a CreateAccountRequest. @NotBlank, @Size(max = 80) and @Pattern(\"USD\") all pass."},
+             {"lane": 3, "text": "The controller converts \"USD\" to Currency.USD and calls the service. That is all it does."},
+             {"lane": 4, "text": "Spring's transaction proxy begins a database transaction before the method body runs.", "log": "BEGIN"},
+             {"lane": 5, "text": "Account.open() picks a random UUID, strips the name to \"Alice Example\", and reads the clock, truncated to microseconds."},
+             {"lane": 6, "text": "entityManager.persist() queues an INSERT. Nothing is sent yet."},
+             {"lane": 4, "text": "Still inside the transaction, the service logs the new id but not the name, because names are personal data. Nothing is committed yet.", "log": "INFO account opened accountId=ba9126e5-… currency=USD"},
+             {"lane": 4, "text": "The method returns, so Spring commits. Hibernate flushes the queued INSERT first."},
+             {"lane": 7, "text": "PostgreSQL checks the constraints: currency = 'USD', name not blank. The row is written.", "log": "INSERT INTO account (created_at, currency, display_name, id) VALUES (...)\nCOMMIT"},
+             {"lane": 3, "text": "ResponseEntity.created() sets status 201 and a Location header pointing at the new account."},
+             {"lane": 0, "text": "The client receives the account, including its server-assigned id."}
+           ],
+           "result": {"ok": true, "status": "201 Created", "summary": "Location: /api/v1/accounts/{id}. Its balance reads 0."}},
+          {"label": "Currency EUR", "request": "POST /api/v1/accounts\n\n{\"displayName\": \"Carol\", \"currency\": \"EUR\"}",
+           "steps": [
+             {"lane": 0, "text": "The client asks for a euro account."},
+             {"lane": 1, "text": "Routing succeeds: the path and method are fine."},
+             {"lane": 2, "fail": true, "text": "@Pattern(regexp = \"USD\") fails. Spring throws MethodArgumentNotValidException before the controller method is called.", "log": "MethodArgumentNotValidException: currency: only USD is supported"},
+             {"lane": 0, "text": "The client receives an RFC 9457 problem response."}
+           ],
+           "result": {"ok": false, "status": "400 Bad Request", "summary": "No transaction, no SQL, no service call. The cheapest place to reject bad input."}},
+          {"label": "Blank name", "request": "POST /api/v1/accounts\n\n{\"displayName\": \"   \", \"currency\": \"USD\"}",
+           "steps": [
+             {"lane": 0, "text": "The name is three spaces."},
+             {"lane": 1, "text": "Routing succeeds."},
+             {"lane": 2, "fail": true, "text": "@NotBlank trims and finds nothing left.", "log": "MethodArgumentNotValidException: displayName: must not be blank"},
+             {"lane": 0, "text": "400 problem response."}
+           ],
+           "result": {"ok": false, "status": "400 Bad Request", "summary": "detail: \"Invalid request content.\""}},
+          {"label": "Broken JSON", "request": "POST /api/v1/accounts\n\n{\"displayName\": \"Dan\", ",
+           "steps": [
+             {"lane": 0, "text": "The body is cut off mid-object."},
+             {"lane": 1, "text": "Routing succeeds."},
+             {"lane": 2, "fail": true, "text": "Jackson cannot parse the body at all, so validation never starts.", "log": "HttpMessageNotReadableException: JSON parse error"},
+             {"lane": 0, "text": "400 problem response."}
+           ],
+           "result": {"ok": false, "status": "400 Bad Request", "summary": "detail: \"Failed to read request\""}},
+          {"label": "Unknown id", "request": "GET /api/v1/accounts/00000000-0000-0000-0000-000000000000",
+           "steps": [
+             {"lane": 0, "text": "A well-formed id that doesn't exist."},
+             {"lane": 1, "text": "Matches AccountController.get()."},
+             {"lane": 2, "text": "The path segment converts to a UUID."},
+             {"lane": 3, "text": "The controller calls accountService.get(id)."},
+             {"lane": 4, "text": "A read-only transaction starts.", "log": "BEGIN READ ONLY"},
+             {"lane": 6, "text": "entityManager.find() looks the id up."},
+             {"lane": 7, "text": "No row matches.", "log": "SELECT ... FROM account WHERE id = ?  → 0 rows"},
+             {"lane": 4, "fail": true, "text": "Optional is empty, so the service throws AccountNotFoundException."},
+             {"lane": 3, "text": "AccountExceptionHandler turns the exception into a ProblemDetail with status 404."},
+             {"lane": 0, "text": "The detail says only \"Account not found\"."}
+           ],
+           "result": {"ok": false, "status": "404 Not Found", "summary": "The domain didn't need to run: there was no account to build."}},
+          {"label": "Malformed id", "request": "GET /api/v1/accounts/not-a-uuid",
+           "steps": [
+             {"lane": 0, "text": "The id is not a UUID."},
+             {"lane": 1, "text": "Matches AccountController.get()."},
+             {"lane": 2, "fail": true, "text": "Spring cannot convert \"not-a-uuid\" to java.util.UUID, so the controller method can't be called.", "log": "MethodArgumentTypeMismatchException"},
+             {"lane": 0, "text": "400 problem response. Note that Spring's default detail echoes the bad value back."}
+           ],
+           "result": {"ok": false, "status": "400 Bad Request", "summary": "detail: \"Failed to convert 'id' with value: 'not-a-uuid'\""}},
+          {"label": "Raw SQL bypass", "request": "psql> INSERT INTO account\n      VALUES (gen_random_uuid(), 'Mallory', 'EUR', now());",
+           "steps": [
+             {"lane": 0, "text": "Someone skips the application entirely and writes SQL."},
+             {"lane": 7, "fail": true, "text": "Only the database is left to object, and it does: CHECK (currency = 'USD') fails.", "log": "ERROR: new row for relation \"account\" violates check constraint \"account_currency_check\""}
+           ],
+           "result": {"ok": false, "status": "ERROR", "summary": "This is why rules are repeated in the schema."}}
+        ]
+      }
+      </script>
+    </div>
+
+    <div class="prose">
+      <h2 id="c2-code" data-short="Code tour">Code tour</h2>
+      <p>Read the excerpts in request order. Every excerpt is copied from the repository and checked on every pull request.</p>
+    </div>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/account/api/CreateAccountRequest.java">
+      <div class="fig-head"><h4>1 · The request shape</h4><span class="path">account/api/CreateAccountRequest.java</span></div>
+<pre class="src">
+public record CreateAccountRequest(
+    @NotBlank @Size(max = Account.MAX_DISPLAY_NAME_LENGTH) String displayName,
+    @NotNull @Pattern(regexp = "USD", message = "only USD is supported") String currency) {
+}
+</pre>
+      <ol class="notes">
+        <li data-at="@NotBlank"><button class="term" data-term="bean-validation">Bean Validation</button> annotations. <code>@Valid</code> on the controller parameter makes Spring check them before the method runs. The limit reuses the domain constant, so the two can't drift apart.</li>
+        <li data-at="@Pattern">Currency arrives as a <code>String</code> and must be exactly <code>USD</code>. Lowercase <code>usd</code> fails too. Validating here gives a clean 400 instead of a conversion error deeper down.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/account/api/AccountController.java">
+      <div class="fig-head"><h4>2 · A thin controller</h4><span class="path">account/api/AccountController.java</span></div>
+<pre class="src">
+@PostMapping
+public ResponseEntity&lt;AccountResponse&gt; open(@Valid @RequestBody CreateAccountRequest request) {
+    Account account = accountService.open(request.displayName(), Currency.valueOf(request.currency()));
+    return ResponseEntity.created(URI.create("/api/v1/accounts/" + account.id())).body(AccountResponse.from(account));
+}
+</pre>
+      <ol class="notes">
+        <li data-at="@Valid @RequestBody"><code>@RequestBody</code> asks Jackson to build the record from JSON. <code>@Valid</code> runs the annotations. Either can fail with a 400 before line 3 runs.</li>
+        <li data-at="accountService.open">One call into the application layer. No rules, no SQL. If you find an <code>if</code> about business logic in a controller, it belongs somewhere else.</li>
+        <li data-at="ResponseEntity.created"><code>201 Created</code> plus a <code>Location</code> header is the HTTP convention for “I made something, and here is its address.” The response body uses a DTO, so the JSON shape can stay stable while the domain changes.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/account/application/AccountService.java">
+      <div class="fig-head"><h4>3 · The use cases</h4><span class="path">account/application/AccountService.java</span></div>
+<pre class="src">
+@Transactional
+public Account open(String displayName, Currency currency) {
+    Account account = Account.open(displayName, currency, clock);
+    accounts.add(account);
+    // Log the id only; display names are user-supplied and treated as personal data.
+    log.info("account opened accountId={} currency={}", account.id(), account.currency());
+    return account;
+}
+
+@Transactional(readOnly = true)
+public Account get(UUID id) {
+    return accounts.findById(id).orElseThrow(() -&gt; new AccountNotFoundException(id));
+}
+
+@Transactional(readOnly = true)
+public AccountBalance balance(UUID id) {
+    Account account = get(id);
+    // No ledger exists yet, so no funds can exist: every account is zero. Chapter 3 replaces this
+    // with a sum over immutable journal postings.
+    Money zero = Money.zero(account.currency());
+    return new AccountBalance(account.id(), zero, zero);
+}
+</pre>
+      <ol class="notes">
+        <li data-at="@Transactional" data-span="2">The transaction boundary belongs to the use case. Spring wraps this method: BEGIN before it runs, COMMIT if it returns, ROLLBACK if it throws.</li>
+        <li data-at="Account.open(displayName">The service orchestrates; the domain decides. Validation, id generation and timestamping all happen inside <code>Account.open</code>.</li>
+        <li data-at="log.info"><code>log.info</code> runs before the method returns, so before COMMIT. If the commit fails, this line has already been logged. It's a small lie in the logs; Chapter 6's outbox is how real systems avoid acting before commit.</li>
+        <li data-at="@Transactional(readOnly = true)" data-span="4">Reads use <code>readOnly = true</code>: Hibernate skips change tracking, and the intent is visible to readers.</li>
+        <li data-at="Money zero" data-span="2">The whole balance feature. Both the <button class="term" data-term="ledger-balance">ledger</button> and the <button class="term" data-term="available-balance">available</button> balance are zero because nothing exists that could make them anything else.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/account/domain/Account.java">
+      <div class="fig-head"><h4>4 · The domain record</h4><span class="path">account/domain/Account.java</span></div>
+<pre class="src">
+public record Account(UUID id, String displayName, Currency currency, Instant createdAt) {
+    public static final int MAX_DISPLAY_NAME_LENGTH = 80;
+
+    public Account {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(currency, "currency");
+        Objects.requireNonNull(createdAt, "createdAt");
+        if (displayName == null || displayName.isBlank()) {
+            throw new IllegalArgumentException("displayName must not be blank");
+        }
+        displayName = displayName.strip();
+        if (displayName.length() &gt; MAX_DISPLAY_NAME_LENGTH) {
+            throw new IllegalArgumentException("displayName must be at most " + MAX_DISPLAY_NAME_LENGTH + " characters");
+        }
+    }
+
+    public static Account open(String displayName, Currency currency, Clock clock) {
+        // PostgreSQL TIMESTAMPTZ stores microseconds; truncating here keeps the value we return on create
+        // identical to the value later read back from the database.
+        return new Account(UUID.randomUUID(), displayName, currency, clock.instant().truncatedTo(ChronoUnit.MICROS));
+    }
+}
+</pre>
+      <ol class="notes">
+        <li data-at="public record Account">A record: immutable, with <code>equals</code> and <code>hashCode</code> for free. Notice what's missing: there is no balance field.</li>
+        <li data-at="public Account {">The compact constructor runs every time an <code>Account</code> is built, whether from an HTTP request or a database row. If an <code>Account</code> object exists, it is valid.</li>
+        <li data-at="isBlank()" data-span="3">The same rule as <code>@NotBlank</code>, checked again. The domain cannot assume every caller came through the API.</li>
+        <li data-at="strip()"><code>strip()</code> removes surrounding whitespace, so <code>"  Alice "</code> is stored as <code>"Alice"</code>. The length check runs after stripping.</li>
+        <li data-at="UUID.randomUUID()">The server picks the id. Random UUIDs can't be guessed or counted like 1, 2, 3, and there's no database round trip to get one.</li>
+        <li data-at="truncatedTo">The fix for a real bug found while writing this chapter. See the failure lab below.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/account/persistence/JpaAccountRepository.java">
+      <div class="fig-head"><h4>5 · The persistence adapter</h4><span class="path">account/persistence/JpaAccountRepository.java</span></div>
+<pre class="src">
+@Override
+public void add(Account account) {
+    // persist (not merge): the id is new, so Hibernate issues one INSERT without a preceding SELECT.
+    entityManager.persist(AccountEntity.from(account));
+}
+</pre>
+      <ol class="notes">
+        <li data-at="public void add">This class is the <button class="term" data-term="port">adapter</button> behind the domain's <code>AccountRepository</code> port. It is package-private, so no other package can reach JPA types.</li>
+        <li data-at="entityManager.persist">Spring Data's <code>save()</code> would call <code>merge</code> for an entity with an id already set, and <code>merge</code> runs a SELECT first. <code>persist</code> says what we mean: this is new.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="sql" data-source="apps/payment-api/src/main/resources/db/migration/V2__accounts.sql">
+      <div class="fig-head"><h4>6 · The schema</h4><span class="path">db/migration/V2__accounts.sql</span></div>
+<pre class="src">
+-- Chapter 2: accounts. Balances are deliberately NOT stored here; Chapter 3 derives them from ledger postings.
+CREATE TABLE account (
+    id           UUID PRIMARY KEY,
+    display_name VARCHAR(80) NOT NULL CHECK (char_length(btrim(display_name)) &gt; 0),
+    currency     VARCHAR(3)  NOT NULL CHECK (currency = 'USD'),
+    created_at   TIMESTAMPTZ NOT NULL
+);
+</pre>
+      <ol class="notes">
+        <li data-at="-- Chapter 2">The file is named <code>V2__accounts.sql</code>, and the <code>V2__</code> prefix is the Flyway version. Once applied, this file must never change. The next schema change is <code>V3__something.sql</code>.</li>
+        <li data-at="display_name">Rules repeated as <code>CHECK</code> constraints. They protect the table from code paths the application doesn't control. But <code>btrim</code> removes only spaces. See the defense-in-depth playground below.</li>
+        <li data-at="currency     VARCHAR">USD only, enforced by the database itself.</li>
+        <li data-at="TIMESTAMPTZ"><code>TIMESTAMPTZ</code> stores an instant at microsecond precision. Java's clock has nanoseconds. Hold that thought.</li>
+        <li data-at="CREATE TABLE account">What isn't here matters most: no <code>balance</code> column. A stored balance would be a second source of truth, and any code that writes it could create money.</li>
+      </ol>
+    </figure>
+
+    <div class="prose">
+      <h2 id="c2-depth" data-short="Defense in depth">Defense in depth</h2>
+      <p>The same rules live in three places: the request DTO, the domain record and the database. Each protects against callers that skip the layer above it. Change the input and the entry point, and see which layer stops it. To enter a tab character, type <code>\t</code>.</p>
+    </div>
+
+    <div class="fig" data-playground="layers">
+      <div class="fig-head"><h4>Which layer catches it?</h4><span class="label">Playground</span></div>
+      <div class="fig-body">
+        <div class="pg-grid">
+          <div style="display:flex;flex-direction:column;gap:0.6rem;min-width:0">
+            <label class="field" for="layers-name">displayName<input type="text" id="layers-name" value="  Alice  "></label>
+            <div class="chips" aria-label="Name examples">
+              <button class="chip" type="button" data-name="Alice">Alice</button>
+              <button class="chip" type="button" data-name="  Alice  ">padded</button>
+              <button class="chip" type="button" data-name="   ">spaces only</button>
+              <button class="chip" type="button" data-name="TAB">tab only</button>
+              <button class="chip" type="button" data-name="LONG">81 characters</button>
+            </div>
+            <span class="visible-ws"></span>
+            <label class="field" for="layers-currency">currency<input type="text" id="layers-currency" value="USD"></label>
+            <div class="chips" aria-label="Currency examples">
+              <button class="chip" type="button" data-currency="USD">USD</button>
+              <button class="chip" type="button" data-currency="usd">usd</button>
+              <button class="chip" type="button" data-currency="EUR">EUR</button>
+            </div>
+            <fieldset style="border:1px solid var(--rule);border-radius:var(--radius);padding:0.5rem 0.75rem;margin:0">
+              <legend class="label">Entry point</legend>
+              <label style="display:block"><input type="radio" name="layers-entry" id="layers-entry-http" value="http" checked> HTTP: POST /api/v1/accounts</label>
+              <label style="display:block"><input type="radio" name="layers-entry" id="layers-entry-java" value="java"> Java: new Account(...) from other code</label>
+              <label style="display:block"><input type="radio" name="layers-entry" id="layers-entry-sql" value="sql"> SQL: INSERT from psql</label>
+            </fieldset>
+          </div>
+          <div style="min-width:0">
+            <ol class="layers">
+              <li data-layer="api"><b>Request DTO</b><span class="why"></span><span class="pill"></span></li>
+              <li data-layer="domain"><b>Account record</b><span class="why"></span><span class="pill"></span></li>
+              <li data-layer="db"><b>PostgreSQL</b><span class="why"></span><span class="pill"></span></li>
+            </ol>
+            <div class="verdict" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
+      <p class="fig-cap">Try <b>tab only</b> with each entry point. Java's <code>isBlank()</code> and Bean Validation both treat a tab as blank. PostgreSQL's <code>btrim()</code> removes only spaces by default. This gap was found while writing the book and is left open as exercise 7.</p>
+    </div>
+
+    <div class="prose">
+      <h2 id="c2-micros" data-short="Failure lab">Failure lab: the microsecond bug</h2>
+      <p>While building this chapter, the integration test failed with two timestamps that looked identical at a glance:</p>
+      <div class="cmd"><pre>expected: AccountResponse[..., createdAt=2026-10-29T04:22:46.720618319Z]
+ but was: AccountResponse[..., createdAt=2026-10-29T04:22:46.720618Z]</pre></div>
+      <p>The POST response echoed the in-memory timestamp with nine fractional digits. PostgreSQL kept six. A client that compared the two, or used <code>createdAt</code> as a paging cursor, would see the record change between writing and reading it.</p>
+    </div>
+
+    <div class="fig" data-playground="micros">
+      <div class="fig-head"><h4>Write, then read back</h4><span class="label">Playground</span></div>
+      <div class="fig-body">
+        <div class="row" style="justify-content:space-between">
+          <button class="btn" type="button" id="micros-run">Create another account</button>
+          <label><input type="checkbox" id="micros-fix"> Apply the fix: <code>truncatedTo(ChronoUnit.MICROS)</code></label>
+        </div>
+        <div class="pg-grid" style="margin-top:1rem">
+          <div class="readout"><span class="label">JVM clock</span><div class="big" data-out="clock"></div><p>Nanosecond precision</p></div>
+          <div class="readout"><span class="label">POST response createdAt</span><div class="big" data-out="response"></div><p>What the client is told</p></div>
+          <div class="readout"><span class="label">GET after reading the row</span><div class="big" data-out="read"></div><p>What PostgreSQL stored</p></div>
+          <div class="readout"><span class="label">Same value?</span><div class="big" data-out="equal"></div><p>Write and read must agree</p></div>
+        </div>
+      </div>
+      <p class="fig-cap">Why didn't <code>AccountControllerTest</code> catch it? It mocks the service, so nothing ever touches PostgreSQL. Only <code>AccountPersistenceIntegrationTest</code>, running against a real database through <button class="term" data-term="testcontainers">Testcontainers</button>, could see the difference.</p>
+    </div>
+
+    <div class="prose">
+      <h2 id="c2-console" data-short="API console">Try the API</h2>
+      <p>This console simulates the Chapter 2 API in your browser. It applies the same validation rules, and its status codes and error bodies were recorded from the real service. Accounts you create here live only until you reload the page. Use <code>{last}</code> in the path for the most recent id.</p>
+    </div>
+
+    <div class="fig" data-playground="sim">
+      <div class="fig-head"><h4>API console (simulated)</h4><span class="label">Playground</span></div>
+      <div class="fig-body">
+        <div class="chips" aria-label="Example requests" style="margin-bottom:0.9rem">
+          <button class="chip" type="button" data-preset="create">Create Alice</button>
+          <button class="chip" type="button" data-preset="padded">Padded name</button>
+          <button class="chip" type="button" data-preset="get">Get last</button>
+          <button class="chip" type="button" data-preset="balance">Balance of last</button>
+          <button class="chip" type="button" data-preset="eur">EUR</button>
+          <button class="chip" type="button" data-preset="blank">Blank name</button>
+          <button class="chip" type="button" data-preset="broken">Broken JSON</button>
+          <button class="chip" type="button" data-preset="unknown">Unknown id</button>
+          <button class="chip" type="button" data-preset="malformed">Malformed id</button>
+          <button class="chip" type="button" data-preset="list">List all accounts</button>
+        </div>
+        <div class="sim">
+          <form style="display:flex;flex-direction:column;gap:0.6rem;min-width:0">
+            <div class="reqline">
+              <select id="sim-method" aria-label="HTTP method"><option>GET</option><option>POST</option><option>DELETE</option></select>
+              <input type="text" id="sim-path" aria-label="Path" spellcheck="false">
+              <button class="btn" type="button" id="sim-send">Send</button>
+            </div>
+            <label class="field" for="sim-body">JSON body (POST only)<textarea id="sim-body" rows="5" spellcheck="false"></textarea></label>
+          </form>
+          <div style="min-width:0"><span class="label">Response</span><pre class="printout" aria-live="polite"></pre></div>
+        </div>
+      </div>
+      <p class="fig-cap">Look closely at <b>List all accounts</b>: 405, not 404. The path exists for POST. There is deliberately no list endpoint, because without authentication it would show every account to anyone.</p>
+    </div>
+
+    <div class="prose">
+      <h2 id="c2-tests" data-short="Test levels">Three kinds of test</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Test</th><th>Starts</th><th>Proves</th><th>Cannot prove</th></tr></thead>
+        <tbody>
+          <tr><td><code>AccountTest</code> (unit)</td><td>Nothing but the JVM</td><td>Domain rules: blank names, length limit, truncation</td><td>Anything about HTTP or SQL</td></tr>
+          <tr><td><code>AccountControllerTest</code> (<button class="term" data-term="contract">contract</button>)</td><td>Spring MVC only; service mocked</td><td>Status codes, validation, JSON shape</td><td>That data survives a round trip to the database</td></tr>
+          <tr><td><code>AccountPersistenceIntegrationTest</code></td><td>Whole app + real PostgreSQL in Docker</td><td>Flyway ran, mapping matches, constraints hold, write = read</td><td>Behavior under concurrency (Chapter 3)</td></tr>
+        </tbody>
+      </table></div>
+
+      <h2 id="c2-failures" data-short="Failure scenarios">Failure scenarios</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Scenario</th><th>Result</th><th>Handled by</th></tr></thead>
+        <tbody>
+          <tr><td><code>currency: "EUR"</code> or <code>"usd"</code></td><td>400</td><td><code>@Pattern</code></td></tr>
+          <tr><td>Blank or 81-character name</td><td>400</td><td><code>@NotBlank</code> / <code>@Size</code></td></tr>
+          <tr><td>Broken JSON</td><td>400 “Failed to read request”</td><td>Jackson</td></tr>
+          <tr><td>Malformed id</td><td>400; the detail echoes the input</td><td>Spring type conversion</td></tr>
+          <tr><td>Unknown id</td><td>404 “Account not found”</td><td><code>AccountExceptionHandler</code></td></tr>
+          <tr><td>GET or DELETE on <code>/api/v1/accounts</code></td><td>405 with <code>Allow</code></td><td>Spring MVC</td></tr>
+          <tr><td>EUR inserted directly with SQL</td><td><code>ERROR: violates check constraint</code></td><td><code>V2__accounts.sql</code></td></tr>
+          <tr><td>Client retries a POST after a timeout</td><td><b>A second account is created</b></td><td>Not yet. <button class="term" data-term="idempotency">Idempotency</button> is Chapter 4</td></tr>
+          <tr><td>Entity and schema disagree</td><td>App refuses to start</td><td><code>ddl-auto: validate</code></td></tr>
+        </tbody>
+      </table></div>
+
+      <h2 id="c2-run" data-short="Run it yourself">Run it yourself</h2>
+      <div class="cmd"><pre>docker compose up --build
+curl -i -X POST http://localhost:8080/api/v1/accounts \
+     -H 'Content-Type: application/json' \
+     -d '{"displayName":"Alice Example","currency":"USD"}'
+curl http://localhost:8080/api/v1/accounts/&lt;id&gt;/balance</pre></div>
+      <p>Run the tests. Docker must be running for the integration test:</p>
+      <div class="cmd"><pre>cd apps/payment-api &amp;&amp; mvn verify</pre></div>
+      <p>No local Java? Run Maven in a container and give it the Docker socket so Testcontainers can start PostgreSQL:</p>
+      <div class="cmd"><pre>docker run --rm -v "$PWD/apps/payment-api:/workspace" -v p2p-m2-cache:/root/.m2 \
+  -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal \
+  -w /workspace maven:3.9-eclipse-temurin-21 mvn -B verify</pre></div>
+      <p>Expected: <code>Tests run: 24, Failures: 0, Errors: 0</code> and <code>BUILD SUCCESS</code>.</p>
+
+      <h2 id="c2-exercises" data-short="Exercises">Exercises</h2>
+      <details class="reveal predict"><summary>POST <code>{"displayName":"Bob","currency":"usd"}</code>. What status comes back?</summary><div><p><b>400.</b> The pattern is case-sensitive. Should the API accept lowercase? If so, decide where to normalize it (DTO, controller or domain) and write down why.</p></div></details>
+      <details class="reveal predict"><summary>In psql, run <code>INSERT INTO account VALUES (gen_random_uuid(), 'Mallory', 'EUR', now());</code></summary><div><p><code>ERROR: new row for relation "account" violates check constraint "account_currency_check"</code>. The API's <code>@Pattern</code> can't help here because psql never touches the API. Open psql with <code>docker compose exec postgres psql -U p2p_lab -d p2p_lab</code>.</p></div></details>
+      <details class="reveal predict"><summary>Change <code>@Column(name = "display_name")</code> to <code>"name"</code> in <code>AccountEntity</code> and run <code>mvn verify</code>. Which tests fail?</summary><div><p>Only <code>AccountPersistenceIntegrationTest</code>. Its Spring context fails to start with <code>Schema-validation: missing column [name] in table [account]</code>. <code>AccountControllerTest</code> still passes because it never loads JPA. Revert afterwards.</p></div></details>
+      <details class="reveal predict"><summary>Add a comment line to <code>V2__accounts.sql</code> and restart the Compose stack. What happens?</summary><div><p>Startup fails with a Flyway <b>checksum mismatch</b> for version 2. Flyway refuses to run against a database whose history disagrees with the files. Revert. To change the schema, add <code>V3__….sql</code>.</p></div></details>
+      <details class="reveal predict"><summary>POST the same body twice. How many accounts exist?</summary><div><p><b>Two</b>, with different ids. Write down how a mobile client could end up sending a request twice: a timeout, a retry button, a flaky network. Keep the note for Chapter 4.</p></div></details>
+      <details class="reveal predict"><summary>Run <code>docker compose logs payment-api | grep "account opened"</code>. What appears?</summary><div><p>The account id and currency. The display name never appears in logs.</p></div></details>
+      <details class="reveal"><summary>Exercise 7: close the tab gap</summary><div><p>In the defense-in-depth playground, a name made only of a tab gets into the table through SQL. PostgreSQL confirms it: <code>INSERT INTO account VALUES (gen_random_uuid(), E'\t', 'USD', now());</code> succeeds.</p><p>Write <code>V3__account_display_name_not_whitespace.sql</code> that replaces the constraint with one that rejects any all-whitespace name. Hint: drop <code>account_display_name_check</code>, then add a check using a regular expression such as <code>display_name ~ '\S'</code>. Add an integration test that inserts <code>E'\t'</code> and expects <code>DataIntegrityViolationException</code>. Think about what happens if an existing row already violates the new rule.</p></div></details>
+    </div>
+
+    <div class="prose">
+      <h2 id="c2-quiz" data-short="Quiz">Check your understanding</h2>
+    </div>
+    <div class="quiz" data-quiz="ch-02">
+      <div class="q" data-answer="c">
+        <p class="q-text">In Java, what does <code>0.1 + 0.2 == 0.3</code> evaluate to, and why?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a"><code>true</code>, because Java rounds doubles to 15 digits</button></li>
+          <li><button data-opt="b">A compile error</button></li>
+          <li><button data-opt="c"><code>false</code>, because 0.1 and 0.2 have no exact binary form, and the sum is 0.30000000000000004</button></li>
+          <li><button data-opt="d"><code>true</code> on 64-bit machines only</button></li>
+        </ul>
+        <p class="q-why" hidden>IEEE 754 doubles store the nearest binary fraction. The tiny error is invisible in one addition and real after a million. Integer cents never round.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">How is $12.34 represented in this project's API?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a"><code>12.34</code></button></li>
+          <li><button data-opt="b"><code>1234</code> with currency USD</button></li>
+          <li><button data-opt="c"><code>"12.34"</code> as a string</button></li>
+          <li><button data-opt="d"><code>12340000</code> micro-dollars</button></li>
+        </ul>
+        <p class="q-why" hidden>Integer minor units (cents), in fields named <code>…Minor</code>. A JSON client never has to parse money as a floating-point number.</p>
+      </div>
+      <div class="q" data-answer="d">
+        <p class="q-text">Why does the <code>account</code> table have no <code>balance</code> column?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">PostgreSQL can't store large integers</button></li>
+          <li><button data-opt="b">It would slow down inserts</button></li>
+          <li><button data-opt="c">Balances are cached in memory instead</button></li>
+          <li><button data-opt="d">It would be a second source of truth that could drift from the postings, and any code that writes it could create money</button></li>
+        </ul>
+        <p class="q-why" hidden>The balance is a read model derived from postings. If a stored balance is ever needed for speed, it must change in the same transaction as the postings and be checkable against them. That would need its own ADR.</p>
+      </div>
+      <div class="q" data-answer="a">
+        <p class="q-text">A POST arrives with <code>"currency": "EUR"</code>. Which code runs?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Routing and validation only. The controller method, service, domain and database are never reached.</button></li>
+          <li><button data-opt="b">Everything up to the database, which rejects the row</button></li>
+          <li><button data-opt="c">The controller, which throws IllegalArgumentException</button></li>
+          <li><button data-opt="d">The service, which rolls back the transaction</button></li>
+        </ul>
+        <p class="q-why" hidden><code>@Valid</code> fails before the method is called, so no transaction ever begins. The cheapest rejection is the earliest one.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">Someone runs an <code>INSERT</code> with currency <code>'EUR'</code> directly in psql. What stops it?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a"><code>@Pattern</code> on the request DTO</button></li>
+          <li><button data-opt="b">The <code>Currency</code> enum</button></li>
+          <li><button data-opt="c">The <code>CHECK (currency = 'USD')</code> constraint in <code>V2__accounts.sql</code></button></li>
+          <li><button data-opt="d">Nothing; the row is stored</button></li>
+        </ul>
+        <p class="q-why" hidden>psql bypasses every Java layer. Only rules in the schema protect the table from code you don't control, such as scripts, batch jobs and future services.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">An unknown id returns 404. What does <code>GET /api/v1/accounts/not-a-uuid</code> return?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">404, because no account has that id</button></li>
+          <li><button data-opt="b">400, because Spring can't convert the path segment to a UUID before calling the controller</button></li>
+          <li><button data-opt="c">500, because UUID.fromString throws</button></li>
+          <li><button data-opt="d">200 with an empty body</button></li>
+        </ul>
+        <p class="q-why" hidden>A malformed id is a bad request, not a missing resource. The conversion fails during argument binding, so the service never runs.</p>
+      </div>
+      <div class="q" data-answer="a">
+        <p class="q-text">Why did only the integration test catch the microsecond bug?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">The controller test mocks the service, so no value was ever stored in PostgreSQL and read back</button></li>
+          <li><button data-opt="b">The unit test runs too fast to see nanoseconds</button></li>
+          <li><button data-opt="c">The controller test doesn't serialize timestamps</button></li>
+          <li><button data-opt="d">Integration tests use a different clock</button></li>
+        </ul>
+        <p class="q-why" hidden>Each test level can only find bugs in what it actually runs. Precision loss happens at the database boundary, so only a test that crosses that boundary can see it.</p>
+      </div>
+      <div class="q" data-answer="d">
+        <p class="q-text">A mobile app's POST times out, and the app retries. What happens today?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">The server detects the duplicate and returns the first account</button></li>
+          <li><button data-opt="b">The database rejects the duplicate name</button></li>
+          <li><button data-opt="c">The second request waits for the first to finish</button></li>
+          <li><button data-opt="d">If the first request succeeded, a second account is created</button></li>
+        </ul>
+        <p class="q-why" hidden>Nothing links the two requests yet, and names aren't unique. For accounts that's a nuisance; for payments it would be a double charge. That is why Chapter 4 adds idempotency keys.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">Why does <code>GET /api/v1/accounts</code> return 405 instead of 404?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">The list endpoint is temporarily disabled</button></li>
+          <li><button data-opt="b">Accounts can only be listed by administrators</button></li>
+          <li><button data-opt="c">The path is mapped, but only for POST, so the method is wrong rather than the resource missing</button></li>
+          <li><button data-opt="d">GET requests need a body</button></li>
+        </ul>
+        <p class="q-why" hidden>The <code>Allow: POST</code> header says so. There is deliberately no list endpoint: without authentication it would show every account to anyone.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">Why is <code>JpaAccountRepository</code> package-private?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Spring requires repositories to be package-private</button></li>
+          <li><button data-opt="b">So other packages can depend only on the <code>AccountRepository</code> port, never on JPA details</button></li>
+          <li><button data-opt="c">To make it faster</button></li>
+          <li><button data-opt="d">So tests can't use it</button></li>
+        </ul>
+        <p class="q-why" hidden>Spring can still create and inject it. Hiding it keeps the domain and service free of JPA, so the persistence technology could change without touching business rules.</p>
+      </div>
+    </div>
+
+    <nav class="chapter-nav prose" aria-label="Chapter navigation">
+      <a href="#ch-01"><small>Previous</small>Chapter 1 · Runnable service</a>
+      <a class="next" href="#glossary"><small>Next</small>Glossary</a>
+    </nav>
+  </section>
+
+  <!-- ================================================================ GLOSSARY -->
+  <section class="view" data-view="glossary" data-title="Glossary" hidden>
+    <div class="prose">
+      <p class="eyebrow">Reference</p>
+      <h1>Glossary</h1>
+      <p class="lede">Every underlined term in the book links here. Definitions describe how this project uses the word.</p>
+      <dl class="glossary">
+        <dt id="term-available-balance">Available balance</dt>
+        <dd>What can be spent right now: the ledger balance minus holds, which are funds reserved for payments still in flight. Holds arrive with payments in Chapter 4.</dd>
+        <dt id="term-bean-validation">Bean Validation</dt>
+        <dd>The Jakarta standard for declaring input rules with annotations such as <code>@NotBlank</code> and <code>@Size</code>. Spring checks them when a parameter is marked <code>@Valid</code>.</dd>
+        <dt id="term-contract">Contract test</dt>
+        <dd>A test of an interface's promises (status codes, field names, validation) with the code behind it replaced by a mock. Fast, but blind to the real implementation.</dd>
+        <dt id="term-di">Dependency injection</dt>
+        <dd>Classes receive their collaborators through the constructor instead of creating them. Spring builds the objects and passes them in, which makes swapping a fake in tests easy.</dd>
+        <dt id="term-flyway">Flyway</dt>
+        <dd>A tool that applies versioned SQL migration files in order and records each one in the <code>flyway_schema_history</code> table.</dd>
+        <dt id="term-idempotency">Idempotency</dt>
+        <dd>The property that doing something twice has the same effect as doing it once. Payment APIs achieve it with a client-supplied key, so a retried request returns the original result instead of paying twice.</dd>
+        <dt id="term-ledger-balance">Ledger balance</dt>
+        <dd>The sum of all postings to an account. Computed, never typed in.</dd>
+        <dt id="term-migration">Migration</dt>
+        <dd>A versioned SQL script that changes the database schema. Once applied, it is never edited; the next change is a new, higher version.</dd>
+        <dt id="term-minor-unit">Minor unit</dt>
+        <dd>The smallest unit of a currency. For USD it is the cent, so $12.34 is 1234 minor units.</dd>
+        <dt id="term-multi-stage">Multi-stage build</dt>
+        <dd>A Dockerfile with several <code>FROM</code> lines. Early stages build; the final stage copies only the result, leaving compilers and source code behind.</dd>
+        <dt id="term-port">Port and adapter</dt>
+        <dd>A port is an interface the core of the application defines, such as <code>AccountRepository</code>. An adapter implements it with a specific technology, such as <code>JpaAccountRepository</code> with JPA.</dd>
+        <dt id="term-posting">Posting</dt>
+        <dd>An immutable ledger record that moves an amount between accounts. Every movement debits one account and credits another by the same amount. Introduced in Chapter 3.</dd>
+        <dt id="term-problem-detail">Problem Detail</dt>
+        <dd>The standard JSON error format from RFC 9457, with <code>type</code>, <code>title</code>, <code>status</code>, <code>detail</code> and <code>instance</code> fields, served as <code>application/problem+json</code>.</dd>
+        <dt id="term-read-model">Read model</dt>
+        <dd>Data computed for display from authoritative records, rather than being authoritative itself.</dd>
+        <dt id="term-testcontainers">Testcontainers</dt>
+        <dd>A library that starts real dependencies, such as PostgreSQL, in throwaway Docker containers for the length of a test run.</dd>
+        <dt id="term-transaction">Transaction</dt>
+        <dd>A unit of database work that either fully commits or fully rolls back. Partial results are never visible.</dd>
+      </dl>
+    </div>
+  </section>
+  </main>
+</div>
+
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-docker.min.js"></script>
+<script src="book.js"></script>
+</body>
+</html>

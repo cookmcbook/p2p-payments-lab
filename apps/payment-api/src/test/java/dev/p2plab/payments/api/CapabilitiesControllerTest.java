@@ -18,6 +18,7 @@ class CapabilitiesControllerTest {
         mvc.perform(get("/api/v1/payments/capabilities"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.paymentProcessingEnabled").value(false))
-            .andExpect(jsonPath("$.chapter").value(1));
+            .andExpect(jsonPath("$.accountsEnabled").value(true))
+            .andExpect(jsonPath("$.chapter").value(2));
     }
 }

@@ -4,7 +4,7 @@
 
 ## How to study
 
-For each chapter: read the mental model; trace the named files; run the system; predict the output; run the tests; deliberately trigger a failure; explain why it failed; only then ask the coding agent to advance. Use the exercises as checkpoints rather than copying implementations blindly.
+Use the [interactive textbook](book/index.html) for each chapter: step through the code tours, run the tracers and playgrounds, and finish the quiz. Then, for each chapter: read the mental model; trace the named files; run the system; predict the output; run the tests; deliberately trigger a failure; explain why it failed; only then ask the coding agent to advance. Use the exercises as checkpoints rather than copying implementations blindly.
 
 ## Learning outcomes
 
@@ -16,4 +16,7 @@ The coding agent must update docs/ARCHITECTURE.md alongside any important code s
 
 ## Chapters
 
-[01 — Foundations and first runnable slice](chapters/01-foundations.md) is implemented as the starting point. See [the roadmap](ROADMAP.md) for future chapters. Do not treat roadmap entries as implemented functionality.
+- [01 — Foundations and first runnable slice](chapters/01-foundations.md)
+- [02 — Accounts, persistence, and a balance that cannot lie](chapters/02-accounts.md)
+
+See [the roadmap](ROADMAP.md) for future chapters. Do not treat roadmap entries as implemented functionality.
