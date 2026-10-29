@@ -6,7 +6,7 @@
 
 `HTTP client → payment-api (Spring MVC) → account module (api → application → domain ← persistence) → PostgreSQL`.
 
-At startup, Flyway migrates PostgreSQL, then Hibernate *validates* (never generates) that JPA mappings match the migrated schema. Actuator serves health. No money moves in this version.
+At startup (recorded order): Spring scans components and applies auto-configuration; Tomcat is created but not yet listening; HikariCP opens the pool (10 connections); Flyway migrates PostgreSQL; Hibernate *validates* (never generates) that JPA mappings match the migrated schema; application beans are wired, with `AccountService` wrapped in a transactional CGLIB proxy; finally Tomcat starts listening on 8080. `entityManagerFactory` depends on `flywayInitializer`, which enforces migrate-before-validate. Actuator serves health. No money moves in this version.
 
 ## Module layout
 
@@ -51,15 +51,18 @@ Packages under `apps/payment-api/src/main/java/dev/p2plab/payments/`. Dependenci
 | `.../test/.../api/CapabilitiesControllerTest.java` | Capabilities contract | No DB |
 | `apps/payment-api/Dockerfile` | Multi-stage Maven/JRE image | Builds JAR (tests skipped; CI runs them) and runs as non-root |
 | `compose.yaml` | Local API + PostgreSQL 16 | Waits for DB health before starting API |
+| `infra/compose.debug.yaml` | **Local-only** overlay ([ADR 0004](adr/0004-under-the-hood-evidence.md)): `docker compose -f compose.yaml -f infra/compose.debug.yaml up`. Sets DEBUG/TRACE for Spring MVC, transactions and Hibernate SQL/binding via `SPRING_APPLICATION_JSON`; exposes actuator `beans`, `mappings`, `conditions` | Used to record the book's evidence. Logs SQL parameters, including display names: never use outside a developer machine. Not used by CI or the Dockerfile |
 | `.github/workflows/ci.yml` | CI | Three jobs: `test` (`mvn verify`; GitHub runners provide Docker for Testcontainers), `textbook` (`check-snippets.mjs`), `docker` (image build) |
-| `docs/book/index.html` | Interactive textbook ([ADR 0003](adr/0003-interactive-textbook.md)): all chapters as hash-routed views, with code tours, tracers, playgrounds, quizzes and the glossary | Static; open from disk or any static host. Code excerpts must match their `data-source` files |
-| `docs/book/book.js` | Enhances declarative components: router, code tours, tracer animation, quizzes (`localStorage` progress), glossary pop-ups, and Chapter 2 playgrounds (money, API simulator, defense in depth, microsecond bug) | Loads Prism 1.29.0 from cdnjs for highlighting; works without it |
+| `docs/book/index.html` | Interactive textbook ([ADR 0003](adr/0003-interactive-textbook.md)): all chapters plus the **Under the hood** companion (`#hood`, [ADR 0004](adr/0004-under-the-hood-evidence.md)) as hash-routed views, with code tours, tracers, playgrounds, quizzes and the glossary | Static; open from disk or any static host. Code excerpts must match their `data-source` files; tracer logs are recorded output |
+| `docs/book/book.js` | Enhances declarative components: router and `data-jump` links, code tours, tracer animation with per-step "Under the hood" panel (`deep`), layer explorer (`.explorer`), quizzes (`localStorage` progress), glossary pop-ups, and playgrounds (money, API simulator, defense in depth, microsecond bug, Docker build cache) | Loads Prism 1.29.0 from cdnjs for highlighting; works without it |
 | `docs/book/book.css` | Theme tokens (light and dark) and component styles | — |
-| `docs/book/tools/check-snippets.mjs` | Node script, no dependencies: verifies excerpts, tour anchors, glossary links, tracer JSON and quiz answers | Run by CI `textbook` job; exits 1 on any drift |
+| `docs/book/tools/check-snippets.mjs` | Node script, no dependencies: verifies excerpts, tour anchors, glossary links, tracer JSON (including `deep` fields), `data-jump` targets, explorer panes and quiz answers | Run by CI `textbook` job; exits 1 on any drift |
 | `docs/adr/0001-modular-monolith.md` | Monolith rationale | — |
 | `docs/adr/0002-money-and-balance-representation.md` | Minor units; derived balances; no seed funds | — |
 | `docs/adr/0003-interactive-textbook.md` | Static HTML book verified in CI | — |
+| `docs/adr/0004-under-the-hood-evidence.md` | Framework internals taught from recorded output; local-only debug overlay | — |
 | `docs/chapters/02-accounts.md` | Chapter 2 textbook | Walkthrough of this slice |
+| `docs/chapters/companion-under-the-hood.md` | Plain-text companion: running layers, bean wiring, transaction proxy, JPA/Hibernate/JDBC, Docker cache | Recorded evidence; re-record on Spring Boot upgrades |
 
 ## Request traces
 

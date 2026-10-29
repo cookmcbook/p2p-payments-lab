@@ -27,6 +27,7 @@
       <li><a href="#home"><span class="no">00</span><span>How to use this book</span></a></li>
       <li><a href="#ch-01"><span class="no">01</span><span>Runnable service</span><span class="score" data-score="ch-01"></span></a></li>
       <li><a href="#ch-02"><span class="no">02</span><span>Accounts</span><span class="score" data-score="ch-02"></span></a></li>
+      <li><a href="#hood"><span class="no">UH</span><span>Under the hood</span><span class="score" data-score="hood"></span></a></li>
       <li><a href="#glossary"><span class="no">Gl</span><span>Glossary</span></a></li>
     </ul>
     <ul class="toc pending" aria-label="Planned chapters">
@@ -58,6 +59,7 @@
       <div class="ledger-head" role="row"><span role="columnheader">No.</span><span role="columnheader">Chapter</span><span role="columnheader">Status</span><span role="columnheader">Your quiz</span></div>
       <a class="ledger-row" role="row" href="#ch-01"><span class="no">01</span><span class="t">From empty repository to runnable service<small>Spring Boot, Docker, Flyway, CI</small></span><span class="pill posted">Posted</span><span class="score" data-score="ch-01"></span></a>
       <a class="ledger-row" role="row" href="#ch-02"><span class="no">02</span><span class="t">Accounts, and a balance that cannot lie<small>Layers, migrations, minor units, Testcontainers</small></span><span class="pill posted">Posted</span><span class="score" data-score="ch-02"></span></a>
+      <a class="ledger-row" role="row" href="#hood"><span class="no">UH</span><span class="t">Under the hood<small>Spring, the transaction proxy, JPA vs Hibernate, Docker layers. Read alongside 01–02</small></span><span class="pill posted">Companion</span><span class="score" data-score="hood"></span></a>
       <div class="ledger-row" role="row"><span class="no">03</span><span class="t">Double-entry ledger<small>Posting invariants, immutability, concurrency</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
       <div class="ledger-row" role="row"><span class="no">04</span><span class="t">Payment API and idempotency<small>Lifecycle states, retries, request fingerprints</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
       <div class="ledger-row" role="row"><span class="no">05</span><span class="t">Authentication and payer ownership<small>Spring Security</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
@@ -79,6 +81,677 @@
         <p><b>Simulations are teaching aids.</b> The tracers and the API console run in your browser and mirror the rules in the Java code. Their responses were recorded from the real API. The code excerpts are checked against the repository on every pull request. To see the real thing, run the commands in each chapter's “Run it yourself” section.</p>
       </div>
     </div>
+  </section>
+
+  <!-- ================================================================ UNDER THE HOOD -->
+  <section class="view" data-view="hood" data-title="Under the hood" hidden>
+    <div class="prose">
+      <p class="eyebrow">Companion · read alongside Chapters 1 and 2</p>
+      <h1>Under the hood</h1>
+      <p class="lede">Spring, Hibernate, JPA and Docker do a lot of work you never typed. This section opens each one up, layer by layer, using output recorded from this project's running service. Nothing here is a paraphrase from memory: every log line, error message and number was captured from the real app.</p>
+      <div class="objectives">
+        <span class="label">You will be able to</span>
+        <ul>
+          <li>name every process and layer that runs when you type <code>docker compose up</code>, and say what each one does;</li>
+          <li>explain what an <button class="term" data-term="annotation">annotation</button> does on its own (nothing) and who reads it;</li>
+          <li>describe how Spring builds your objects and passes them to each other, and read its startup errors;</li>
+          <li>explain why the <code>AccountService</code> you call is not the class you wrote;</li>
+          <li>say which of JPA, Hibernate, JDBC and HikariCP sends the SQL, and when;</li>
+          <li>predict which Docker build steps rerun after you change a file.</li>
+        </ul>
+      </div>
+      <div class="callout">
+        <p><b>How to read this section.</b> Each part starts with a short summary you can stop at. Below it, the panels, tracers and <b>Under the hood</b> boxes go deeper, one layer at a time. Take as much depth as you want. Later chapters link back here when they lean on an idea.</p>
+      </div>
+
+      <h2 id="h-stack" data-short="What is running">Everything that runs when you type <code>docker compose up</code></h2>
+      <p>Your Java code is the smallest part of the running system. It sits inside Spring, which sits inside a Java virtual machine, which runs inside a container, which runs inside a small Linux virtual machine that Docker Desktop manages on your computer. PostgreSQL runs in a second container beside it. Click a layer to see what it is and what it looked like on the machine that recorded this book.</p>
+    </div>
+
+    <div class="fig explorer">
+      <div class="fig-head"><h4>The running system, outside in</h4><span class="label">Explorer · recorded</span></div>
+      <div class="fig-body">
+        <ul class="stack" aria-label="Layers">
+          <li><button data-pane="host" style="--d:0">Your computer<small>Windows · Docker Desktop</small></button></li>
+          <li><button data-pane="net" style="--d:1">Docker network<small>p2p-payments-lab_default</small></button></li>
+          <li><button data-pane="ctr" style="--d:2">Container: payment-api<small>Ubuntu 26.04 · user app</small></button></li>
+          <li><button data-pane="jvm" style="--d:3">JVM<small>java -jar /app/app.jar · PID 1</small></button></li>
+          <li><button data-pane="jar" style="--d:4">The fat JAR<small>230 entries · 68 libraries</small></button></li>
+          <li><button data-pane="spring" style="--d:4">Spring container<small>372 beans</small></button></li>
+          <li><button data-pane="tomcat" style="--d:5">Tomcat<small>:8080 · worker threads</small></button></li>
+          <li><button data-pane="hikari" style="--d:5">HikariCP<small>10 database connections</small></button></li>
+          <li><button data-pane="code" style="--d:5">Your code<small>17 classes</small></button></li>
+          <li><button data-pane="pg" style="--d:2">Container: postgres<small>PostgreSQL 16.15 · 172.18.0.2</small></button></li>
+          <li><button data-pane="vol" style="--d:3">Volume: pgdata<small>where the rows live</small></button></li>
+        </ul>
+        <div>
+          <div class="pane" data-name="host">
+            <h5>Your computer and Docker Desktop</h5>
+            <p>Containers are a Linux feature. On Windows, Docker Desktop runs a small Linux <b>virtual machine</b> in the background, and every container is a process inside it. <code>docker compose up</code> reads <code>compose.yaml</code> and then, in order: builds the API image if needed, creates a private network, starts <code>postgres</code>, waits for its health check to pass, and only then starts <code>payment-api</code>.</p>
+            <pre class="printout">$ docker compose ps
+payment-api   Up 15 seconds
+postgres      Up 21 seconds (healthy)</pre>
+            <p class="analogy">Docker Desktop is an apartment building. Each container is a flat with its own locked door, its own furniture (files) and its own doorbell (network address), but all flats share the building's foundations (the Linux kernel).</p>
+          </div>
+          <div class="pane" data-name="net" hidden>
+            <h5>The Compose network</h5>
+            <p>Compose creates one private network per project and runs a tiny DNS server on it. Every service gets a <b>hostname equal to its service name</b>. That is why <code>DB_URL</code> in <code>compose.yaml</code> says <code>postgres:5432</code> and not <code>localhost:5432</code>: inside a container, <code>localhost</code> means that same container.</p>
+            <pre class="printout">$ docker compose exec payment-api getent hosts postgres
+172.18.0.2      postgres
+
+$ docker network inspect p2p-payments-lab_default
+p2p-payments-lab-payment-api-1 172.18.0.3/16
+p2p-payments-lab-postgres-1 172.18.0.2/16</pre>
+            <p>The line <code>"8080:8080"</code> under <code>ports:</code> forwards port 8080 on your computer into the container. That is the only reason <code>curl localhost:8080</code> works from Windows. When the <code>postgres</code> container is stopped, its name leaves the DNS server. The API then fails with <code>UnknownHostException: postgres</code>, not "connection refused". See the startup tracer in Chapter 1.</p>
+          </div>
+          <div class="pane" data-name="ctr" hidden>
+            <h5>The payment-api container</h5>
+            <p>A <button class="term" data-term="container">container</button> is an ordinary Linux process with walls around it. It has its own view of the filesystem (unpacked from the <button class="term" data-term="image">image</button>), its own network address and its own process list. It is not a virtual machine and has no kernel of its own. The files come from the base image <code>eclipse-temurin:21-jre</code>, which is built on Ubuntu.</p>
+            <pre class="printout">$ docker compose exec payment-api id
+uid=999(app) gid=999(app) groups=999(app)
+
+$ docker compose exec payment-api cat /etc/os-release
+PRETTY_NAME="Ubuntu 26.04.1 LTS"
+
+$ docker compose exec payment-api sh -c "cat /proc/1/cmdline | tr '\0' ' '"
+java -jar /app/app.jar</pre>
+            <p>Two facts to keep. The process runs as user <code>app</code>, not <code>root</code>, because the Dockerfile says <code>USER app</code>. And Java is <b>process 1</b>: when process 1 exits, the container stops. A Spring startup failure therefore shows up in Compose as <code>Exited (1)</code>.</p>
+          </div>
+          <div class="pane" data-name="jvm" hidden>
+            <h5>The Java virtual machine</h5>
+            <p><code>javac</code> compiles <code>.java</code> files into <button class="term" data-term="jvm">bytecode</button>: <code>.class</code> files containing instructions for an imaginary machine. The JVM is the program that runs that imaginary machine. It loads each class the first time something needs it, runs it, and compiles frequently used methods into real machine code while the program runs (just-in-time compilation).</p>
+            <pre class="printout">INFO 1 --- [main] PaymentApiApplication : Starting PaymentApiApplication v0.1.0-SNAPSHOT
+  using Java 21.0.12.1 with PID 1 (/app/app.jar started by app in /app)</pre>
+            <p>Every log line names a <button class="term" data-term="thread">thread</button> in square brackets. <code>[main]</code> is the thread that runs startup. Requests run on other threads, as you'll see under Tomcat.</p>
+          </div>
+          <div class="pane" data-name="jar" hidden>
+            <h5>The fat JAR</h5>
+            <p>A JAR is a zip file of <code>.class</code> files. Spring Boot's Maven plugin repackages ours as a <button class="term" data-term="fat-jar">fat JAR</button>: our classes go in <code>BOOT-INF/classes</code>, and every library we depend on goes in, whole, under <code>BOOT-INF/lib</code>. Its manifest reveals a surprise: <code>java -jar</code> doesn't start our class first.</p>
+            <pre class="printout">META-INF/MANIFEST.MF
+Main-Class: org.springframework.boot.loader.launch.JarLauncher
+Start-Class: dev.p2plab.payments.PaymentApiApplication
+Spring-Boot-Version: 3.4.5
+
+230 entries · 17 of our classes · 68 library JARs, including:
+  spring-core-6.2.6.jar         spring-webmvc-6.2.6.jar     tomcat-embed-core-10.1.40.jar
+  jackson-databind-2.18.3.jar   hibernate-core-6.6.13.Final.jar
+  jakarta.persistence-api-3.1.0.jar   spring-orm-6.2.6.jar   spring-tx-6.2.6.jar
+  HikariCP-5.1.0.jar            postgresql-42.7.5.jar       flyway-core-10.20.1.jar
+BOOT-INF/classes/db/migration/V1__baseline.sql
+BOOT-INF/classes/db/migration/V2__accounts.sql
+BOOT-INF/classes/application.yml</pre>
+            <p><code>JarLauncher</code> sets up a class loader that can read JARs nested inside a JAR, then calls our <code>main</code>. Notice the SQL files: migrations ship <em>inside</em> the JAR. That is how Flyway finds <code>classpath:db/migration</code> in a container that has no source code.</p>
+          </div>
+          <div class="pane" data-name="spring" hidden>
+            <h5>The Spring container</h5>
+            <p>The Spring container (the "application context") is a registry of long-lived objects called <button class="term" data-term="bean">beans</button>. Spring creates each one once at startup, passes them to each other, and keeps them until shutdown. Our code contributes 8 of them. The other 364 come from <button class="term" data-term="auto-config">auto-configuration</button>: Tomcat, Jackson, Hibernate, Flyway, the connection pool and their helpers.</p>
+            <pre class="printout">GET /actuator/beans  (abridged; exposed only by infra/compose.debug.yaml)
+accountController    AccountController                         deps=accountService
+accountService       AccountService$$SpringCGLIB$$0            deps=jpaAccountRepository,clock
+jpaAccountRepository JpaAccountRepository$$SpringCGLIB$$0      deps=jpaSharedEM_AWC_entityManagerFactory
+timeConfig           TimeConfig$$SpringCGLIB$$0
+entityManagerFactory jdk.proxy2.$Proxy134                      deps=flyway,flywayInitializer,…
+dataSource           com.zaxxer.hikari.HikariDataSource
+transactionManager   org.springframework.orm.jpa.JpaTransactionManager
+total: 372 beans</pre>
+            <p>Look at the types. <code>AccountService$$SpringCGLIB$$0</code> is a class nobody wrote. Spring generated it at startup. Why is explained in <a href="#hood" data-jump="h-proxy">the transaction proxy</a> below.</p>
+          </div>
+          <div class="pane" data-name="tomcat" hidden>
+            <h5>Tomcat</h5>
+            <p>Tomcat is the web server, running inside the same JVM as a library. It owns the socket on port 8080 and a pool of worker <button class="term" data-term="thread">threads</button> (up to 200 by default). Each request is handled from start to finish by one thread, which is why every log line of one request carries the same thread name:</p>
+            <pre class="printout">DEBUG [nio-8080-exec-5] DispatcherServlet : POST "/api/v1/accounts", parameters={}
+DEBUG [nio-8080-exec-5] JpaTransactionManager : Creating new transaction …
+INFO  [nio-8080-exec-5] AccountService : account opened accountId=4806a533-… currency=USD
+DEBUG [nio-8080-exec-5] DispatcherServlet : Completed 201 CREATED</pre>
+            <p>Startup logs show Tomcat twice. <code>Tomcat initialized with port 8080</code> appears early, but the port isn't accepting connections yet. <code>Tomcat started on port 8080</code> appears last, after every bean was created. If anything fails before that, the port never opens.</p>
+          </div>
+          <div class="pane" data-name="hikari" hidden>
+            <h5>HikariCP, the connection pool</h5>
+            <p>Opening a database connection takes a network handshake and a login. Doing that for every request would be slow, so <button class="term" data-term="pool">HikariCP</button> opens connections at startup and lends them out. A transaction borrows one at <code>BEGIN</code> and returns it after <code>COMMIT</code> or <code>ROLLBACK</code>. The default pool holds 10.</p>
+            <pre class="printout">INFO [main] HikariPool-1 - Starting...
+INFO [main] HikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@5f45bc8e
+INFO [main] HikariPool-1 - Start completed.
+
+postgres=# SELECT count(*), application_name, state FROM pg_stat_activity
+           WHERE datname = 'p2p_lab' AND pid &lt;&gt; pg_backend_pid() GROUP BY 2, 3;
+ count | application_name       | state
+    10 | PostgreSQL JDBC Driver | idle</pre>
+            <p>Ten idle connections, waiting. If an eleventh transaction starts while all ten are busy, it waits, for up to 30 seconds by default, and then fails. Chapter 3's concurrency work will make this visible.</p>
+          </div>
+          <div class="pane" data-name="code" hidden>
+            <h5>Your code</h5>
+            <p>Seventeen classes. They fall into two very different groups:</p>
+            <p><b>Beans</b> (created once by Spring, shared by every request): <code>AccountController</code>, <code>AccountService</code>, <code>JpaAccountRepository</code>, <code>AccountExceptionHandler</code>, <code>CapabilitiesController</code>, <code>TimeConfig</code> and the <code>Clock</code> it makes. They hold no per-request data, which is why one object can serve many threads at once.</p>
+            <p><b>Values</b> (created with <code>new</code> for each request and thrown away): <code>Account</code>, <code>Money</code>, <code>CreateAccountRequest</code>, <code>AccountResponse</code>, <code>BalanceResponse</code>, <code>AccountBalance</code>, <code>AccountEntity</code>. Most are records: immutable, so sharing them between threads is safe too.</p>
+            <p class="analogy">Beans are the staff of a restaurant, hired once and serving every table. Values are the orders: written for one table, then discarded.</p>
+          </div>
+          <div class="pane" data-name="pg" hidden>
+            <h5>The postgres container</h5>
+            <p>A completely separate process, in its own container, reached over the network. The API's JDBC driver talks to it over TCP port 5432 using PostgreSQL's own wire protocol.</p>
+            <pre class="printout">INFO [main] FlywayExecutor : Database: jdbc:postgresql://postgres:5432/p2p_lab (PostgreSQL 16.15)
+
+p2p_lab=# \d account
+ Column       | Type                     | Nullable
+ id           | uuid                     | not null
+ display_name | character varying(80)    | not null
+ currency     | character varying(3)     | not null
+ created_at   | timestamp with time zone | not null
+Indexes:
+    "account_pkey" PRIMARY KEY, btree (id)
+Check constraints:
+    "account_currency_check" CHECK (currency::text = 'USD'::text)
+    "account_display_name_check" CHECK (char_length(btrim(display_name::text)) &gt; 0)</pre>
+            <p>The constraint names were invented by PostgreSQL from the table and column. The primary key automatically got an index, which is what makes <code>WHERE id = ?</code> fast.</p>
+          </div>
+          <div class="pane" data-name="vol" hidden>
+            <h5>The pgdata volume</h5>
+            <p>A container's own files disappear when the container is removed. A <b>volume</b> is storage that Docker keeps separately and mounts into the container. <code>compose.yaml</code> mounts the <code>pgdata</code> volume at <code>/var/lib/postgresql/data</code>, where PostgreSQL keeps its files.</p>
+            <pre class="printout">$ docker volume ls
+p2p-payments-lab_pgdata
+
+p2p_lab=# SELECT installed_rank, version, script, checksum, success FROM flyway_schema_history;
+ 1 | 1 | V1__baseline.sql |  1210165407 | t
+ 2 | 2 | V2__accounts.sql |  -830823360 | t</pre>
+            <p><code>docker compose down</code> removes the containers and keeps the volume, so your accounts survive. <code>docker compose down -v</code> deletes the volume too: every account and the Flyway history are gone, and the next start reruns V1 and V2 from scratch. The <code>checksum</code> column is how Flyway notices if someone edits an applied migration.</p>
+          </div>
+        </div>
+      </div>
+      <p class="fig-cap">Everything above was recorded on 29 October 2026 from this repository's Compose stack, and abridged to fit. Your ids, addresses and memory addresses will differ; the shape will not. The commands are in <a href="#hood" data-jump="h-try">See it on your machine</a>.</p>
+    </div>
+
+    <div class="prose">
+      <h2 id="h-java" data-short="Just enough Java">Just enough Java: annotations are labels</h2>
+      <p>The single most useful fact for reading Spring code: <b>an annotation does nothing by itself.</b> <code>@Transactional</code> contains no transaction code. It is a label stored in the <code>.class</code> file. Something else has to look for the label at runtime, using <button class="term" data-term="reflection">reflection</button>, and act on it. When an annotation "doesn't work", the question is always: who was supposed to read it, and did they get the chance?</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Annotation in this project</th><th>Read by</th><th>When</th><th>What the reader does</th></tr></thead>
+        <tbody>
+          <tr><td><code>@SpringBootApplication</code></td><td>Spring Boot</td><td>Startup</td><td>Turns on component scanning and auto-configuration</td></tr>
+          <tr><td><code>@RestController</code>, <code>@Service</code>, <code>@Repository</code>, <code>@Configuration</code></td><td>Spring component scan</td><td>Startup</td><td>"Make one object of this class and manage it as a bean"</td></tr>
+          <tr><td><code>@Bean</code></td><td>Spring</td><td>Startup</td><td>Calls the method once; its return value becomes a bean (our <code>Clock</code>)</td></tr>
+          <tr><td><code>@Transactional</code></td><td>Spring AOP</td><td>Startup, then every call</td><td>Wraps the bean in a proxy that begins and ends transactions</td></tr>
+          <tr><td><code>@GetMapping</code>, <code>@PostMapping</code></td><td>Spring MVC</td><td>Startup</td><td>Builds the route table: method + path → Java method</td></tr>
+          <tr><td><code>@Valid</code>, <code>@NotBlank</code>, <code>@Size</code>, <code>@Pattern</code></td><td>Spring MVC + Hibernate Validator</td><td>Every request</td><td>Checks the request object; any failure becomes a 400</td></tr>
+          <tr><td><code>@Entity</code>, <code>@Table</code>, <code>@Column</code>, <code>@Id</code></td><td>Hibernate</td><td>Startup and every query</td><td>Maps the class to a table, then generates SQL from that map</td></tr>
+          <tr><td><code>@Override</code></td><td>The compiler</td><td>Compile time</td><td>Fails the build if the method doesn't actually override anything</td></tr>
+        </tbody>
+      </table></div>
+      <details class="reveal predict"><summary>A unit test runs <code>new AccountService(repository, clock).open("Alice", Currency.USD)</code>. Does a transaction begin?</summary><div><p><b>No.</b> The test created the object with <code>new</code>, so Spring never saw it and never wrapped it in a proxy. The <code>@Transactional</code> label is still on the method, but nobody reads it. This is why <code>AccountTest</code> tests domain rules only, and why transaction behavior is checked in the integration test, where Spring builds the objects.</p></div></details>
+      <p>A few more Java words you'll meet. A <b>class</b> is a blueprint; an <b>object</b> is one thing built from it with <code>new</code>. An <b>interface</b> is a promise of methods with no body, such as <code>AccountRepository</code>; a class <code>implements</code> it. A <b>record</b> is a class whose fields are fixed at construction, with <code>equals</code>, <code>hashCode</code> and <code>toString</code> written for you. A <b>constructor</b> is the code that runs while an object is being built; records can add checks there, which is how <code>Account</code> rejects blank names.</p>
+
+      <h2 id="h-spring" data-short="Spring builds objects">Spring: a factory that builds and connects your objects</h2>
+      <p>Your classes need each other: the controller needs the service, the service needs a repository and a clock, the repository needs Hibernate. Something has to create them in the right order and hand each one what it needs. Without Spring you would write that code yourself in <code>main</code>. With Spring, you declare what each class needs as constructor parameters, and Spring works out the order. This is called <button class="term" data-term="di">dependency injection</button>, and the thing doing it is the <button class="term" data-term="ioc">IoC container</button>.</p>
+      <p>Here is roughly what Spring does for this project, written out by hand. This is a sketch for understanding, not real code:</p>
+      <div class="cmd"><pre>// What Spring does at startup, written by hand (simplified sketch)
+DataSource dataSource = new HikariDataSource(config);           // opens 10 connections
+Flyway.configure().dataSource(dataSource).load().migrate();     // V1, V2
+EntityManagerFactory emf = buildHibernate(dataSource);          // validates AccountEntity
+Clock clock = new TimeConfig().clock();
+AccountRepository repo = new JpaAccountRepository(sharedEntityManager(emf));
+AccountService service = new AccountService(repo, clock);
+AccountService proxy = wrapWithTransactions(service);           // the @Transactional part
+AccountController controller = new AccountController(proxy);
+tomcat.addRoutes(controller);
+tomcat.start();                                                 // port 8080 opens last</pre></div>
+      <p>Watch the real thing. The normal scenario uses the startup log; the three broken scenarios were produced by breaking a copy of the code and starting it. Every error message is real.</p>
+    </div>
+
+    <div class="fig tracer">
+      <div class="fig-head"><h4>Spring startup: building the beans</h4><div class="chips" aria-label="Scenario"></div></div>
+      <div class="fig-body stage">
+        <ol class="lanes"></ol>
+        <div class="side">
+          <div><span class="label">What changed</span><pre class="printout request"></pre></div>
+          <div><span class="label">Startup log (recorded)</span><pre class="printout" aria-live="polite"></pre></div>
+          <div class="result" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="controls"><div class="row"><button class="btn" type="button">Play</button><button class="btn ghost" type="button">Step</button><button class="btn ghost" type="button">Reset</button></div><span class="progress"></span></div>
+      <script type="application/json">
+      {
+        "lanes": [
+          {"name": "Component scan", "detail": "@SpringBootApplication"},
+          {"name": "Auto-configuration", "detail": "219 matched · 296 skipped"},
+          {"name": "Tomcat initialized", "detail": "port not open yet"},
+          {"name": "dataSource", "detail": "HikariCP"},
+          {"name": "flyway", "detail": "V1, V2"},
+          {"name": "entityManagerFactory", "detail": "Hibernate"},
+          {"name": "clock", "detail": "TimeConfig.clock()"},
+          {"name": "jpaAccountRepository", "detail": "needs EntityManager"},
+          {"name": "accountService", "detail": "needs repository + clock"},
+          {"name": "accountController", "detail": "needs AccountService"},
+          {"name": "Tomcat started", "detail": ":8080 open"}
+        ],
+        "scenarios": [
+          {"label": "Normal startup", "request": "Nothing. This is the code in the repository.",
+           "steps": [
+             {"lane": 0, "text": "Spring finds our annotated classes and writes a recipe for each.", "log": "Starting PaymentApiApplication v0.1.0-SNAPSHOT using Java 21.0.12.1 with PID 1\nFound 0 JPA repository interfaces.",
+              "deep": "<code>SpringApplication.run</code> creates the container. <code>@SpringBootApplication</code> includes <code>@ComponentScan</code>, so Spring walks every class in <code>dev.p2plab.payments</code> and its sub-packages, looking for <code>@Component</code> or one of its specializations: <code>@RestController</code>, <code>@Service</code>, <code>@Repository</code>, <code>@Configuration</code>, <code>@RestControllerAdvice</code>.\n\nFor each one it records a <b>bean definition</b>: a recipe (which class, which constructor), not an object yet. Records like <code>Account</code> have no such annotation, so Spring ignores them.\n\n<code>Found 0 JPA repository interfaces</code> is Spring Data looking for interfaces that extend <code>JpaRepository</code>. We wrote our repository by hand on purpose, so it finds none."},
+             {"lane": 1, "text": "Spring Boot adds recipes for the libraries it finds on the classpath.",
+              "deep": "<code>spring-boot-autoconfigure.jar</code> contains hundreds of configuration classes. Each one is guarded by conditions. <code>FlywayAutoConfiguration</code> only applies if the class <code>org.flywaydb.core.Flyway</code> exists; <code>KafkaAutoConfiguration</code> only if <code>KafkaTemplate</code> exists.\n\nOn this app, 219 conditions matched and 296 didn't. Recorded from <code>/actuator/conditions</code>: <code>KafkaAutoConfiguration: @ConditionalOnClass did not find required class 'org.springframework.kafka.core.KafkaTemplate'</code>.\n\nSo adding a dependency to <code>pom.xml</code> can switch features on with no code change. That is convenient, and it is also why you should know what's on your classpath."},
+             {"lane": 2, "text": "Tomcat is created early so web beans can register with it. It isn't listening yet.", "log": "Tomcat initialized with port 8080 (http)\nStarting Servlet engine: [Apache Tomcat/10.1.40]",
+              "deep": "Tomcat is a library running inside this JVM, not a separate program. Spring creates it now because the web parts of the container need somewhere to register. The port is reserved but nothing is served until the very last step. If a later bean fails, Tomcat is stopped without ever having accepted a request."},
+             {"lane": 3, "text": "The connection pool opens its first connection to PostgreSQL.", "log": "HikariPool-1 - Starting...\nHikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@5f45bc8e\nHikariPool-1 - Start completed.",
+              "deep": "Who asked for a <code>DataSource</code> this early? Flyway did. Spring creates beans on demand, dependencies first. <code>/actuator/beans</code> shows the chain: <code>entityManagerFactory</code> depends on <code>flywayInitializer</code>, which depends on <code>flyway</code>, which needs a <code>dataSource</code>.\n\nThat chain is deliberate: Hibernate must not validate the schema until Flyway has finished migrating it."},
+             {"lane": 4, "text": "Flyway compares the migrations in the JAR with flyway_schema_history.", "log": "Database: jdbc:postgresql://postgres:5432/p2p_lab (PostgreSQL 16.15)\nSuccessfully validated 2 migrations (execution time 00:00.017s)\nCurrent version of schema \"public\": 2\nSchema \"public\" is up to date. No migration necessary.",
+              "deep": "Flyway reads <code>db/migration/*.sql</code> from inside the JAR, computes a checksum of each file, and compares it with the <code>flyway_schema_history</code> table. <b>Validated</b> means applied files are unchanged. <b>Up to date</b> means there is no file with a higher version than 2. On an empty database it would run V1 and V2 here, each in its own transaction."},
+             {"lane": 5, "text": "Hibernate reads AccountEntity and checks it against the real table.", "log": "HHH000412: Hibernate ORM core version 6.6.13.Final\nInitialized JPA EntityManagerFactory for persistence unit 'default'",
+              "deep": "Hibernate scans for <code>@Entity</code> classes (there is one: <code>AccountEntity</code>) and builds a model of each: table <code>account</code>, column <code>display_name</code> as <code>VARCHAR(80)</code>, and so on. With <code>ddl-auto: validate</code> it then reads the real table's columns from PostgreSQL and compares. A missing column stops startup here. Try the <b>Entity doesn't match</b> scenario."},
+             {"lane": 6, "text": "TimeConfig.clock() is called once; the Clock it returns becomes a bean.",
+              "deep": "<code>TimeConfig</code> is itself a bean, and its type in <code>/actuator/beans</code> is <code>TimeConfig$$SpringCGLIB$$0</code>. Spring subclasses every <code>@Configuration</code> class so that calling a <code>@Bean</code> method twice still returns the same single object. In tests, a different <code>Clock</code> can be supplied, which is the reason <code>AccountService</code> asks for a clock instead of calling <code>Instant.now()</code>."},
+             {"lane": 7, "text": "The repository's constructor needs an EntityManager. It gets a shared stand-in.",
+              "deep": "There is one <code>JpaAccountRepository</code> for the whole app, but every transaction needs its own <code>EntityManager</code>. So Spring injects a <b>shared EntityManager</b> (<code>jpaSharedEM_AWC_entityManagerFactory</code> in the bean list): a stand-in that, on each call, looks up the real <code>EntityManager</code> belonging to the transaction on the <em>current thread</em> and forwards to it.\n\nThe repository is also wrapped in a proxy (<code>JpaAccountRepository$$SpringCGLIB$$0</code>) because of <code>@Repository</code>: that proxy translates Hibernate exceptions into Spring's, such as <code>DataIntegrityViolationException</code>."},
+             {"lane": 8, "text": "AccountService gets its repository and clock, then is replaced by a proxy.",
+              "deep": "Spring looks for exactly one bean of type <code>AccountRepository</code> and exactly one of type <code>Clock</code>, and calls the constructor with them. Zero or two candidates is an error, not a guess. Try the broken scenarios.\n\nThen a <b>bean post-processor</b> notices <code>@Transactional</code> and swaps the finished object for a generated subclass, <code>AccountService$$SpringCGLIB$$0</code>. From here on, anyone asking for an <code>AccountService</code> receives the proxy."},
+             {"lane": 9, "text": "The controller receives the proxy, and its @PostMapping/@GetMapping methods enter the route table.",
+              "deep": "<code>AccountController</code>'s constructor asks for an <code>AccountService</code> and gets the proxy; the controller can't tell the difference. <code>RequestMappingHandlerMapping</code> reads the mapping annotations of every controller and builds the table that <code>DispatcherServlet</code> consults on every request."},
+             {"lane": 10, "text": "Everything succeeded, so the port finally opens.", "log": "Tomcat started on port 8080 (http) with context path '/'\nStarted PaymentApiApplication in 3.35 seconds (process running for 3.718)",
+              "deep": "Only now does the app accept requests. The order protects clients: a request can never arrive at a half-built application."}
+           ],
+           "result": {"ok": true, "status": "Started", "summary": "372 beans, built in dependency order. The port opened last."}},
+          {"label": "No Clock bean", "request": "TimeConfig.java: the @Configuration line is deleted.\nNothing else changes.",
+           "steps": [
+             {"lane": 0, "text": "Component scan skips TimeConfig: without @Configuration it is just a class.", "log": "Starting PaymentApiApplication v0.1.0-SNAPSHOT using Java 21.0.12.1",
+              "deep": "Nothing reads the <code>@Bean</code> on <code>clock()</code> unless the class itself is a bean. No recipe for a <code>Clock</code> is registered, and nothing complains yet."},
+             {"lane": 2, "text": "Tomcat is initialized as usual.", "log": "Tomcat initialized with port 8080 (http)"},
+             {"lane": 3, "text": "The pool connects.", "log": "HikariPool-1 - Start completed."},
+             {"lane": 4, "text": "Flyway runs normally. The database is fine.", "log": "Schema \"public\" is up to date. No migration necessary."},
+             {"lane": 5, "text": "Hibernate validates normally.", "log": "Initialized JPA EntityManagerFactory for persistence unit 'default'"},
+             {"lane": 6, "fail": true, "text": "There is no recipe that produces a java.time.Clock."},
+             {"lane": 8, "fail": true, "text": "AccountService's constructor needs a Clock. Spring stops and explains.", "log": "Exception encountered during context initialization - cancelling refresh attempt: …UnsatisfiedDependencyException\n\nAPPLICATION FAILED TO START\n\nDescription:\nParameter 1 of constructor in dev.p2plab.payments.account.application.AccountService\nrequired a bean of type 'java.time.Clock' that could not be found.\n\nAction:\nConsider defining a bean of type 'java.time.Clock' in your configuration.",
+              "deep": "<b>Parameter 1</b> counts from zero: the constructor is <code>AccountService(AccountRepository accounts, Clock clock)</code>, so parameter 0 is the repository and parameter 1 is the clock.\n\nSpring then shuts down what it had built, in reverse: the log shows <code>Closing JPA EntityManagerFactory</code>, <code>HikariPool-1 - Shutdown completed</code> and <code>Stopping service [Tomcat]</code>. The JVM exits with code 1, so a container would show <code>Exited (1)</code>."}
+           ],
+           "result": {"ok": false, "status": "Failed to start", "summary": "Flyway and Hibernate had already succeeded. Failures appear in dependency order, not file order."}},
+          {"label": "Two repositories", "request": "New file: InMemoryAccountRepository.java\n@Repository class InMemoryAccountRepository implements AccountRepository",
+           "steps": [
+             {"lane": 0, "text": "Component scan now finds two classes that implement AccountRepository.", "log": "Starting PaymentApiApplication v0.1.0-SNAPSHOT using Java 21.0.12.1"},
+             {"lane": 3, "text": "The pool connects.", "log": "HikariPool-1 - Start completed."},
+             {"lane": 4, "text": "Flyway runs normally.", "log": "Schema \"public\" is up to date. No migration necessary."},
+             {"lane": 5, "text": "Hibernate validates normally.", "log": "Initialized JPA EntityManagerFactory for persistence unit 'default'"},
+             {"lane": 7, "text": "Both repository beans can be created on their own. The trouble is choosing one."},
+             {"lane": 8, "fail": true, "text": "AccountService asks for one AccountRepository and there are two. Spring refuses to guess.", "log": "APPLICATION FAILED TO START\n\nDescription:\nParameter 0 of constructor in dev.p2plab.payments.account.application.AccountService\nrequired a single bean, but 2 were found:\n\t- inMemoryAccountRepository: defined in URL [jar:nested:/workspace/target/payment-api-0.1.0-SNAPSHOT.jar/!BOOT-INF/classes/!/dev/p2plab/payments/account/persistence/InMemoryAccountRepository.class]\n\t- jpaAccountRepository: defined in URL [jar:nested:/workspace/target/payment-api-0.1.0-SNAPSHOT.jar/!BOOT-INF/classes/!/dev/p2plab/payments/account/persistence/JpaAccountRepository.class]\n\nAction:\nConsider marking one of the beans as @Primary, updating the consumer to accept\nmultiple beans, or using @Qualifier to identify the bean that should be consumed",
+              "deep": "Spring injects <b>by type</b>. One candidate is wired silently, zero is an error, and two is also an error. The suggested fixes: <code>@Primary</code> marks a default, and <code>@Qualifier(\"name\")</code> picks one at the injection point. Asking for a <code>List&lt;AccountRepository&gt;</code> receives all of them.\n\nThe bean names are the class names with a lowercase first letter. Note the <code>jar:nested:</code> URLs: Spring found these classes inside the fat JAR."}
+           ],
+           "result": {"ok": false, "status": "Failed to start", "summary": "Ambiguity is a startup error, not a runtime surprise."}},
+          {"label": "Entity doesn't match", "request": "AccountEntity.java:\n@Column(name = \"display_name\")  →  @Column(name = \"name\")",
+           "steps": [
+             {"lane": 0, "text": "Scanning works as usual.", "log": "Starting PaymentApiApplication v0.1.0-SNAPSHOT using Java 21.0.12.1"},
+             {"lane": 3, "text": "The pool connects.", "log": "HikariPool-1 - Start completed."},
+             {"lane": 4, "text": "Flyway finds the schema up to date. The SQL is fine.", "log": "Schema \"public\" is up to date. No migration necessary."},
+             {"lane": 5, "fail": true, "text": "Hibernate looks for column name in table account and doesn't find it.", "log": "Failed to initialize JPA EntityManagerFactory: [PersistenceUnit: default]\nUnable to build Hibernate SessionFactory; nested exception is\norg.hibernate.tool.schema.spi.SchemaManagementException:\nSchema-validation: missing column [name] in table [account]",
+              "deep": "Because <code>ddl-auto</code> is <code>validate</code>, Hibernate compares and refuses; it never tries to rename or add the column. With <code>update</code> it would have silently added a new empty <code>name</code> column to production. That is exactly the kind of unreviewed schema change Flyway exists to prevent.\n\nNothing after this lane runs: the clock, repository, service and controller are never created."}
+           ],
+           "result": {"ok": false, "status": "Failed to start", "summary": "A mapping typo is caught before the first request, not by a customer."}}
+        ]
+      }
+      </script>
+    </div>
+
+    <div class="prose">
+      <h2 id="h-proxy" data-short="@Transactional proxy">@Transactional: the object you call isn't the one you wrote</h2>
+      <p>When <code>AccountController</code> calls <code>accountService.open(...)</code>, it isn't calling your <code>AccountService</code>. It is calling <code>AccountService$$SpringCGLIB$$0</code>, a subclass Spring generated at startup using a library called CGLIB. That subclass overrides every public method. The override begins a transaction, calls your real method, then commits if it returned normally or rolls back if it threw. That wrapper object is a <button class="term" data-term="proxy">proxy</button>.</p>
+      <p>Sketched as Java (the real one is generated bytecode and never exists as source):</p>
+      <div class="cmd"><pre>// Sketch of the generated subclass, simplified
+class AccountService$$SpringCGLIB$$0 extends AccountService {
+    AccountService target;                 // your real object
+    TransactionInterceptor tx;             // reads @Transactional
+
+    @Override
+    public Account open(String displayName, Currency currency) {
+        var status = tx.begin("AccountService.open");  // borrow a connection, BEGIN
+        try {
+            Account result = target.open(displayName, currency);  // your code runs here
+            tx.commit(status);                         // flush queued SQL, COMMIT
+            return result;
+        } catch (RuntimeException e) {
+            tx.rollback(status);                       // ROLLBACK
+            throw e;
+        }
+    }
+}</pre></div>
+      <p>Every log line in the tracer below was recorded with <code>infra/compose.debug.yaml</code>, which turns on Spring's and Hibernate's own debug logging.</p>
+    </div>
+
+    <div class="fig tracer">
+      <div class="fig-head"><h4>Inside one transactional call</h4><div class="chips" aria-label="Scenario"></div></div>
+      <div class="fig-body stage">
+        <ol class="lanes"></ol>
+        <div class="side">
+          <div><span class="label">Call</span><pre class="printout request"></pre></div>
+          <div><span class="label">Debug log (recorded)</span><pre class="printout" aria-live="polite"></pre></div>
+          <div class="result" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="controls"><div class="row"><button class="btn" type="button">Play</button><button class="btn ghost" type="button">Step</button><button class="btn ghost" type="button">Reset</button></div><span class="progress"></span></div>
+      <script type="application/json">
+      {
+        "lanes": [
+          {"name": "AccountController", "detail": "your code"},
+          {"name": "AccountService$$SpringCGLIB$$0", "detail": "generated proxy"},
+          {"name": "TransactionInterceptor", "detail": "reads @Transactional"},
+          {"name": "JpaTransactionManager", "detail": "EntityManager + connection"},
+          {"name": "AccountService", "detail": "your method body"},
+          {"name": "Persistence context", "detail": "Hibernate's to-do list"},
+          {"name": "PostgreSQL", "detail": "via JDBC"}
+        ],
+        "scenarios": [
+          {"label": "open(): commit", "request": "accountService.open(\"  Alice Example \", Currency.USD)",
+           "steps": [
+             {"lane": 0, "text": "The controller calls open(). Its field actually holds the proxy.",
+              "deep": "The field <code>private final AccountService accountService</code> is typed as <code>AccountService</code>, and the proxy <em>is</em> an <code>AccountService</code> (a subclass), so Java is happy. This is why the proxy approach needs no change to your code."},
+             {"lane": 1, "text": "The proxy's override of open() runs first and hands control to the interceptor.",
+              "deep": "CGLIB generated this subclass at startup by writing bytecode directly. Because it works by overriding, it can only intercept methods that can be overridden: <code>public</code>, not <code>final</code>, not <code>private</code>. A <code>@Transactional</code> on a private method is silently ignored."},
+             {"lane": 2, "text": "The interceptor reads @Transactional: default settings, read-write.",
+              "deep": "The annotation's attributes become the transaction's definition. <code>PROPAGATION_REQUIRED</code> means \"join the current transaction if there is one; otherwise start one\". <code>ISOLATION_DEFAULT</code> means \"use the database's default\", which for PostgreSQL is <b>READ COMMITTED</b>. Chapter 3 will need to think hard about that."},
+             {"lane": 3, "text": "The manager creates an EntityManager, borrows a connection and begins.", "log": "JpaTransactionManager : Creating new transaction with name [dev.p2plab.payments.account.application.AccountService.open]: PROPAGATION_REQUIRED,ISOLATION_DEFAULT\nJpaTransactionManager : Opened new EntityManager [SessionImpl(288912832<open>)] for JPA transaction\nTransactionImpl : begin",
+              "deep": "Three things happen. A fresh <code>EntityManager</code> (Hibernate's <code>SessionImpl</code>) is created for this transaction only. A connection is borrowed from HikariCP and its auto-commit is switched off, so statements wait for an explicit <code>COMMIT</code>. Both are then bound to the <b>current thread</b>, <code>nio-8080-exec-5</code>, so the repository's shared EntityManager can find them without being passed anything."},
+             {"lane": 2, "text": "The transaction is ready. Now your method can run.", "log": "TransactionInterceptor : Getting transaction for [dev.p2plab.payments.account.application.AccountService.open]"},
+             {"lane": 4, "text": "Your code: Account.open() builds the record, then accounts.add(account).",
+              "deep": "This is plain Java. <code>Account.open</code> calls <code>UUID.randomUUID()</code> (122 random bits from a cryptographically strong generator), strips the name, reads the injected clock and truncates it to microseconds. No Spring, no SQL."},
+             {"lane": 5, "text": "persist() puts the entity in the persistence context and queues an INSERT. No SQL is sent.",
+              "deep": "The <button class=\"term\" data-term=\"persistence-context\">persistence context</button> is a map of every entity this <code>EntityManager</code> is tracking, keyed by id, plus an action queue of SQL still to send. <code>persist</code> adds to both. The proof is in the log: nothing appears between <code>begin</code> and the next line."},
+             {"lane": 4, "text": "Your code logs the new id and returns. Still no SQL.", "log": "AccountService : account opened accountId=4806a533-ee1c-43d2-a436-2966526469c7 currency=USD",
+              "deep": "This line is logged <b>before</b> any INSERT reached the database. If the commit fails, the log has already claimed success. Keep this in mind for Chapter 6's outbox."},
+             {"lane": 2, "text": "Your method returned normally, so the interceptor asks for a commit.", "log": "TransactionInterceptor : Completing transaction for [dev.p2plab.payments.account.application.AccountService.open]\nJpaTransactionManager : Initiating transaction commit\nJpaTransactionManager : Committing JPA transaction on EntityManager [SessionImpl(288912832<open>)]\nTransactionImpl : committing"},
+             {"lane": 5, "text": "Before committing, Hibernate flushes its queue: the INSERT is finally generated and sent.", "log": "SQL : insert into account (created_at,currency,display_name,id) values (?,?,?,?)\nbind : binding parameter (1:TIMESTAMP_UTC) <- [2026-10-29T20:02:20.109795Z]\nbind : binding parameter (2:VARCHAR) <- [USD]\nbind : binding parameter (3:VARCHAR) <- [Alice Example]\nbind : binding parameter (4:UUID) <- [4806a533-ee1c-43d2-a436-2966526469c7]",
+              "deep": "A <button class=\"term\" data-term=\"flush\">flush</button> turns the queue into SQL. The statement has <code>?</code> placeholders, and the values travel separately: a <b>prepared statement</b>. The database never parses a value as SQL, so a name like <code>'); DROP TABLE account;--</code> is stored as text, not executed.\n\nLook at parameter 3: the bind log printed the display name. The service carefully logs only the id, yet one debug setting leaked the name anyway. This is why <code>infra/compose.debug.yaml</code> is for your machine only."},
+             {"lane": 6, "text": "PostgreSQL checks the constraints, writes the row and commits.",
+              "deep": "The <code>CHECK</code> constraints from V2 run here. Until <code>COMMIT</code>, the new row is invisible to every other connection. After it, everyone sees it. That's the A (atomic) and I (isolated) in ACID."},
+             {"lane": 3, "text": "The EntityManager is closed and the connection goes back to the pool.", "log": "JpaTransactionManager : Closing JPA EntityManager [SessionImpl(288912832<open>)] after transaction"},
+             {"lane": 0, "text": "The controller receives the Account and builds the 201 response."}
+           ],
+           "result": {"ok": true, "status": "COMMIT", "summary": "One INSERT, sent at commit time, after your method had already returned."}},
+          {"label": "get(): rollback", "request": "accountService.get(UUID.fromString(\"00000000-0000-0000-0000-000000000000\"))",
+           "steps": [
+             {"lane": 0, "text": "The controller asks for an account that doesn't exist."},
+             {"lane": 1, "text": "The proxy intercepts get()."},
+             {"lane": 3, "text": "A read-only transaction begins.", "log": "JpaTransactionManager : Creating new transaction with name [dev.p2plab.payments.account.application.AccountService.get]: PROPAGATION_REQUIRED,ISOLATION_DEFAULT,readOnly\nTransactionImpl : begin",
+              "deep": "<code>readOnly</code> comes from <code>@Transactional(readOnly = true)</code>. Spring tells Hibernate not to track changes (no flush at commit) and marks the JDBC connection read-only."},
+             {"lane": 4, "text": "Your code calls accounts.findById(id)."},
+             {"lane": 5, "text": "find() isn't in the persistence context, so Hibernate must query.", "log": "SQL : select ae1_0.id,ae1_0.created_at,ae1_0.currency,ae1_0.display_name from account ae1_0 where ae1_0.id=?\nbind : binding parameter (1:UUID) <- [00000000-0000-0000-0000-000000000000]",
+              "deep": "Unlike <code>persist</code>, a <code>find</code> needs an answer now, so the SELECT is sent immediately. <code>ae1_0</code> is an alias Hibernate generated for <code>AccountEntity</code>. If the same id were found twice in one transaction, the second <code>find</code> would be answered from the persistence context without SQL."},
+             {"lane": 6, "text": "Zero rows."},
+             {"lane": 4, "fail": true, "text": "Optional is empty, so your code throws AccountNotFoundException."},
+             {"lane": 2, "fail": true, "text": "A RuntimeException left the method, so the interceptor rolls back.", "log": "TransactionInterceptor : Completing transaction for [dev.p2plab.payments.account.application.AccountService.get] after exception: dev.p2plab.payments.account.application.AccountNotFoundException: Account not found: 00000000-0000-0000-0000-000000000000\nJpaTransactionManager : Initiating transaction rollback\nTransactionImpl : rolling back",
+              "deep": "By default Spring rolls back on <code>RuntimeException</code> and <code>Error</code>, but <b>commits</b> on checked exceptions (those declared with <code>throws</code>). <code>AccountNotFoundException</code> extends <code>RuntimeException</code>, so: rollback. Here there was nothing to undo, but the rule matters as soon as a method writes."},
+             {"lane": 0, "text": "The exception continues upward and AccountExceptionHandler turns it into a 404.", "log": "ExceptionHandlerExceptionResolver : Using @ExceptionHandler dev.p2plab.payments.account.api.AccountExceptionHandler#notFound()\nDispatcherServlet : Completed 404 NOT_FOUND"}
+           ],
+           "result": {"ok": false, "status": "ROLLBACK", "summary": "The proxy rethrows after rolling back, so the web layer still sees the exception."}},
+          {"label": "balance() calls get()", "request": "accountService.balance(id)\n  // inside balance():  Account account = get(id);",
+           "steps": [
+             {"lane": 0, "text": "The controller calls balance()."},
+             {"lane": 1, "text": "The proxy intercepts balance()."},
+             {"lane": 3, "text": "One read-only transaction begins, for balance.", "log": "JpaTransactionManager : Creating new transaction with name [dev.p2plab.payments.account.application.AccountService.balance]: PROPAGATION_REQUIRED,ISOLATION_DEFAULT,readOnly\nTransactionInterceptor : Getting transaction for [dev.p2plab.payments.account.application.AccountService.balance]"},
+             {"lane": 4, "text": "Inside balance(), your code calls get(id), which means this.get(id). The proxy isn't involved.",
+              "deep": "<code>get(id)</code> inside the class is <code>this.get(id)</code>, and <code>this</code> is your real object, not the proxy. The call never passes through the interceptor, so <code>get</code>'s own <code>@Transactional</code> is never read.\n\nThe proof: the log has no <code>Getting transaction for [...get]</code> line. Here that is harmless, because <code>balance</code> is already transactional. It becomes a real bug when a <em>non</em>-transactional method calls a transactional one in the same class and expects a transaction. This is called <b>self-invocation</b>."},
+             {"lane": 6, "text": "The SELECT runs inside balance's transaction.", "log": "SQL : select ae1_0.id,ae1_0.created_at,ae1_0.currency,ae1_0.display_name from account ae1_0 where ae1_0.id=?"},
+             {"lane": 4, "text": "Your code returns two Money.zero values."},
+             {"lane": 3, "text": "The read-only transaction commits.", "log": "TransactionInterceptor : Completing transaction for [dev.p2plab.payments.account.application.AccountService.balance]\nJpaTransactionManager : Initiating transaction commit\nTransactionImpl : committing",
+              "deep": "Even a read-only transaction ends in a <code>COMMIT</code>. That just ends the transaction; there is nothing to write."}
+           ],
+           "result": {"ok": true, "status": "1 transaction", "summary": "Two @Transactional methods ran, but only the outer call went through the proxy."}}
+        ]
+      }
+      </script>
+    </div>
+
+    <div class="prose">
+      <h2 id="h-jpa" data-short="JPA vs Hibernate">JPA, Hibernate, JDBC: who does what</h2>
+      <p>These names get used as if they meant the same thing. They are layers, each built on the one below. Only the bottom one actually talks to the database.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Layer</th><th>What it is</th><th>In this project</th><th>JAR in the image</th></tr></thead>
+        <tbody>
+          <tr><td><button class="term" data-term="jpa">JPA</button></td><td>A <em>specification</em>: interfaces and annotations only, such as <code>EntityManager</code> and <code>@Entity</code>. No code that talks to a database.</td><td><code>AccountEntity</code>, <code>JpaAccountRepository</code></td><td><code>jakarta.persistence-api-3.1.0</code></td></tr>
+          <tr><td><button class="term" data-term="hibernate">Hibernate</button></td><td>An <em>implementation</em> of JPA (an ORM). Tracks entities, generates SQL, turns rows into objects.</td><td>Behind every <code>EntityManager</code> call</td><td><code>hibernate-core-6.6.13.Final</code></td></tr>
+          <tr><td>Spring ORM + TX</td><td>Glue. Opens an <code>EntityManager</code> per transaction and binds it to the thread.</td><td><code>@Transactional</code>, <code>JpaTransactionManager</code></td><td><code>spring-orm</code>, <code>spring-tx</code> 6.2.6</td></tr>
+          <tr><td><button class="term" data-term="jdbc">JDBC</button></td><td>Java's built-in, low-level database API: <code>Connection</code>, <code>PreparedStatement</code>, <code>ResultSet</code>.</td><td>Used by Hibernate and Flyway, never by our code</td><td>Part of the JDK (<code>java.sql</code>)</td></tr>
+          <tr><td><button class="term" data-term="pool">HikariCP</button></td><td>A pool that keeps JDBC connections open and lends them out.</td><td>10 connections</td><td><code>HikariCP-5.1.0</code></td></tr>
+          <tr><td>PostgreSQL JDBC driver</td><td>Implements JDBC for PostgreSQL: speaks its wire protocol over TCP port 5432.</td><td>Loaded from <code>DB_URL</code>'s <code>jdbc:postgresql:</code> prefix</td><td><code>postgresql-42.7.5</code></td></tr>
+          <tr><td>PostgreSQL</td><td>The database server.</td><td>The <code>postgres</code> container</td><td>Separate image, <code>postgres:16-alpine</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>Why have JPA at all, rather than using Hibernate directly? Because code written against the specification could, in principle, switch implementation. In practice the bigger benefit is a stable, documented API. Our domain doesn't import either: <code>account.domain</code> sees only the <code>AccountRepository</code> port.</p>
+      <p>The key idea to carry into Chapter 3 is the <button class="term" data-term="persistence-context">persistence context</button>. Hibernate doesn't write when you call <code>persist</code>. It remembers, and writes everything at <button class="term" data-term="flush">flush</button> time, normally just before commit. Here is the real log of one create, with the moments that matter highlighted:</p>
+    </div>
+    <div class="evidence prose">
+      <span class="label">Recorded with infra/compose.debug.yaml · POST /api/v1/accounts</span>
+<pre class="printout">[nio-8080-exec-5] JpaTransactionManager : Creating new transaction with name [...AccountService.open]
+[nio-8080-exec-5] TransactionImpl       : <span class="hl">begin</span>
+[nio-8080-exec-5] AccountService        : <span class="hl">account opened</span> accountId=4806a533-… currency=USD
+[nio-8080-exec-5] JpaTransactionManager : Initiating transaction commit
+[nio-8080-exec-5] TransactionImpl       : <span class="hl">committing</span>
+[nio-8080-exec-5] SQL                   : <span class="hl">insert into account</span> (created_at,currency,display_name,id) values (?,?,?,?)
+[nio-8080-exec-5] JpaTransactionManager : Closing JPA EntityManager [SessionImpl(288912832&lt;open&gt;)] after transaction
+[nio-8080-exec-5] DispatcherServlet     : Completed 201 CREATED</pre>
+    </div>
+    <div class="prose">
+      <p>Three consequences follow, and each comes back later in the book:</p>
+      <ul>
+        <li><b>Constraint errors surface at commit, not at <code>persist</code>.</b> A <code>CHECK</code> violation is thrown from the proxy's commit, after your method returned. The stack trace points at the proxy, not at your line.</li>
+        <li><b>Logs can run ahead of the database.</b> "account opened" was written before the INSERT existed.</li>
+        <li><b>Reads in the same transaction see your pending writes.</b> Hibernate flushes automatically before a query that might be affected, so you never read stale data from your own transaction.</li>
+      </ul>
+
+      <h2 id="h-docker" data-short="Docker images">Docker: images, layers and the build cache</h2>
+      <p>An <button class="term" data-term="image">image</button> is a read-only template: a stack of filesystem <button class="term" data-term="layer">layers</button> plus some settings (which user, which command). Each instruction in the Dockerfile adds one layer. A <button class="term" data-term="container">container</button> is a process started from an image, with a thin writable layer on top that is thrown away with the container.</p>
+      <p>Here are the real layers of this project's image, newest first. The <code>FROM eclipse-temurin:21-jre</code> base contributes the operating system and the Java runtime; our Dockerfile adds the last few.</p>
+    </div>
+    <div class="evidence prose">
+      <span class="label">Recorded, with ← notes added · docker history p2p-payments-lab-payment-api</span>
+<pre class="printout">SIZE     CREATED BY
+0B       ENTRYPOINT ["java" "-jar" "/app/app.jar"]                     ← our Dockerfile
+0B       EXPOSE [8080/tcp]                                              ← our Dockerfile
+0B       USER app                                                       ← our Dockerfile
+<span class="hl">56.6MB</span>   COPY --chown=app:app /workspace/target/…SNAPSHOT.jar /app/app.jar  ← our Dockerfile
+41kB     RUN groupadd --system app &amp;&amp; useradd --system --gid app app       ← our Dockerfile
+8.19kB   WORKDIR /app                                                   ← our Dockerfile
+…
+<span class="hl">166MB</span>    RUN … download and verify the Java 21 runtime                    ← eclipse-temurin base
+58.2MB   RUN apt-get install … curl, ca-certificates, locales            ← eclipse-temurin base
+…        (Ubuntu base layers)</pre>
+    </div>
+    <div class="prose">
+      <p>Settings such as <code>USER</code> and <code>ENTRYPOINT</code> add 0-byte layers: they change metadata, not files. The 56.6 MB layer is the fat JAR, almost all of it libraries. Maven, the JDK compiler and our source code are absent: they lived only in the <code>build</code> stage, which is discarded. On the recording machine, <code>docker images</code> reported the final image at 563 MB and the Maven build image at 814 MB.</p>
+      <p>Layers are also why rebuilds can be fast. Docker reuses a step's previous result (<b>CACHED</b>) if the instruction is unchanged, the files it copies are unchanged, and every earlier step in the same stage was reused. The first step that misses forces every later step in that stage to run again. Predict, then check:</p>
+    </div>
+
+    <div class="fig" data-playground="cache">
+      <div class="fig-head"><h4>Which build steps run again?</h4><span class="label">Playground</span></div>
+      <div class="fig-body">
+        <div class="row" style="justify-content:space-between">
+          <div class="chips" aria-label="What changed">
+            <button class="chip" type="button" data-change="none" aria-pressed="false">Nothing</button>
+            <button class="chip" type="button" data-change="src" aria-pressed="true">A Java file</button>
+            <button class="chip" type="button" data-change="pom" aria-pressed="false">pom.xml</button>
+            <button class="chip" type="button" data-change="jre" aria-pressed="false">New JRE base image</button>
+          </div>
+          <label><input type="checkbox" id="cache-naive"> Naive Dockerfile: <code>COPY . .</code> first</label>
+        </div>
+        <ol class="build-steps" data-variant="real">
+          <li data-stage="build"><span class="stage">build</span><code>FROM maven:3.9-eclipse-temurin-21 AS build</code><span class="pill"></span></li>
+          <li data-stage="build"><span class="stage">build</span><code>WORKDIR /workspace</code><span class="pill"></span></li>
+          <li data-stage="build" data-on="pom"><span class="stage">build</span><code>COPY pom.xml .</code><span class="pill"></span></li>
+          <li data-stage="build" data-slow="dependency:go-offline downloads every library and plugin"><span class="stage">build</span><code>RUN mvn -B -q dependency:go-offline</code><span class="pill"></span></li>
+          <li data-stage="build" data-on="src"><span class="stage">build</span><code>COPY src ./src</code><span class="pill"></span></li>
+          <li data-stage="build" data-out="jar" data-slow="package compiles and builds the JAR"><span class="stage">build</span><code>RUN mvn -B -q -DskipTests package</code><span class="pill"></span></li>
+          <li data-stage="runtime" data-on="jre"><span class="stage">runtime</span><code>FROM eclipse-temurin:21-jre</code><span class="pill"></span></li>
+          <li data-stage="runtime"><span class="stage">runtime</span><code>WORKDIR /app</code><span class="pill"></span></li>
+          <li data-stage="runtime"><span class="stage">runtime</span><code>RUN groupadd … &amp;&amp; useradd …</code><span class="pill"></span></li>
+          <li data-stage="runtime" data-on="jar"><span class="stage">runtime</span><code>COPY --from=build … app.jar</code><span class="pill"></span></li>
+          <li data-stage="runtime" data-meta><span class="stage">runtime</span><code>USER app · EXPOSE · ENTRYPOINT</code><span class="pill"></span></li>
+        </ol>
+        <ol class="build-steps" data-variant="naive" hidden>
+          <li data-stage="build"><span class="stage">build</span><code>FROM maven:3.9-eclipse-temurin-21 AS build</code><span class="pill"></span></li>
+          <li data-stage="build"><span class="stage">build</span><code>WORKDIR /workspace</code><span class="pill"></span></li>
+          <li data-stage="build" data-on="pom src"><span class="stage">build</span><code>COPY . .</code><span class="pill"></span></li>
+          <li data-stage="build" data-out="jar" data-slow="package downloads every library and plugin, then compiles"><span class="stage">build</span><code>RUN mvn -B -q -DskipTests package</code><span class="pill"></span></li>
+          <li data-stage="runtime" data-on="jre"><span class="stage">runtime</span><code>FROM eclipse-temurin:21-jre</code><span class="pill"></span></li>
+          <li data-stage="runtime"><span class="stage">runtime</span><code>WORKDIR /app</code><span class="pill"></span></li>
+          <li data-stage="runtime"><span class="stage">runtime</span><code>RUN groupadd … &amp;&amp; useradd …</code><span class="pill"></span></li>
+          <li data-stage="runtime" data-on="jar"><span class="stage">runtime</span><code>COPY --from=build … app.jar</code><span class="pill"></span></li>
+          <li data-stage="runtime" data-meta><span class="stage">runtime</span><code>USER app · EXPOSE · ENTRYPOINT</code><span class="pill"></span></li>
+        </ol>
+        <div class="verdict" aria-live="polite"></div>
+      </div>
+      <p class="fig-cap">Tick <b>Naive Dockerfile</b> and choose <b>A Java file</b>: every source edit now re-downloads all dependencies. Copying <code>pom.xml</code> alone first, as the real Dockerfile does, is what keeps that slow step cached.</p>
+    </div>
+
+    <div class="evidence prose">
+      <span class="label">Recorded, condensed to one line per step · docker build --progress=plain after adding one Java file</span>
+<pre class="printout">#8  [build 2/6] WORKDIR /workspace                               CACHED
+#9  [build 3/6] COPY pom.xml .                                   CACHED
+#10 [build 4/6] RUN mvn -B -q dependency:go-offline              CACHED
+#11 [build 5/6] COPY src ./src                                   <span class="hl">DONE 0.0s</span>
+#12 [build 6/6] RUN mvn -B -q -DskipTests package                <span class="hl">DONE 4.8s</span>
+#13 [stage-1 2/4] WORKDIR /app                                   CACHED
+#14 [stage-1 3/4] RUN groupadd --system app &amp;&amp; useradd …          CACHED
+#15 [stage-1 4/4] COPY --from=build --chown=app:app … /app/app.jar <span class="hl">DONE 0.1s</span></pre>
+    </div>
+
+    <div class="prose">
+      <p>The recording matches the playground's <b>A Java file</b> case exactly: the dependency download was reused, compile and package ran, the user setup was reused, and the new JAR was copied. One subtlety: Docker compares file <em>contents</em>, not timestamps, so saving a file without changing it doesn't invalidate anything.</p>
+
+      <h2 id="h-try" data-short="See it yourself">See it on your machine</h2>
+      <p>Start the stack with the debug overlay. It turns on the same logging used to record this section and exposes the extra actuator endpoints. Use it only locally: it logs display names.</p>
+      <div class="cmd"><pre>docker compose -f compose.yaml -f infra/compose.debug.yaml up --build -d
+curl.exe -s -X POST http://localhost:8080/api/v1/accounts -H "Content-Type: application/json" --data-binary "@alice.json"
+docker compose logs payment-api --tail 30</pre></div>
+      <p>Create <code>alice.json</code> first with the content <code>{"displayName":"Alice","currency":"USD"}</code>. Windows PowerShell 5.1 mangles quotes inside <code>curl.exe</code> arguments, which is why the body is read from a file. Then explore:</p>
+      <div class="cmd"><pre># Your 8 beans and what they depend on (PowerShell)
+$b = (curl.exe -s http://localhost:8080/actuator/beans | ConvertFrom-Json).contexts.'payment-api'.beans
+$b.accountService
+
+# Who am I inside the container, and where is postgres?
+docker compose exec payment-api id
+docker compose exec payment-api getent hosts postgres
+
+# The image's layers
+docker history p2p-payments-lab-payment-api
+
+# The 10 pooled connections, seen from PostgreSQL
+docker compose exec postgres psql -U p2p_lab -d p2p_lab -c "SELECT count(*), state FROM pg_stat_activity WHERE datname = 'p2p_lab' GROUP BY state;"</pre></div>
+      <p>When you're done, return to normal logging:</p>
+      <div class="cmd"><pre>docker compose down
+docker compose up -d</pre></div>
+
+      <h2 id="h-exercises" data-short="Exercises">Exercises</h2>
+      <details class="reveal predict"><summary>Delete <code>@Configuration</code> from <code>TimeConfig</code> and start the app. Which bean fails, and has Flyway already run?</summary><div><p><code>Parameter 1 of constructor in dev.p2plab.payments.account.application.AccountService required a bean of type 'java.time.Clock' that could not be found.</code> Yes, Flyway and Hibernate both finished first, because they sit earlier in the dependency chain. Revert the change afterwards.</p></div></details>
+      <details class="reveal predict"><summary>Add a second <code>@Repository</code> class that implements <code>AccountRepository</code>. What happens?</summary><div><p>Startup fails: <code>required a single bean, but 2 were found: inMemoryAccountRepository … jpaAccountRepository</code>. Spring suggests <code>@Primary</code> or <code>@Qualifier</code>. Delete the class afterwards.</p></div></details>
+      <details class="reveal predict"><summary>With the debug overlay, create an account. In the log, does <code>insert into account</code> come before or after <code>account opened</code>?</summary><div><p><b>After.</b> <code>persist</code> only queues the INSERT. Hibernate flushes at commit, which happens when <code>open()</code> has already returned and logged.</p></div></details>
+      <details class="reveal predict"><summary>With the debug overlay, request a balance. How many <code>Creating new transaction</code> lines appear?</summary><div><p><b>One</b>, for <code>balance</code>. Its internal call to <code>get(id)</code> is self-invocation and bypasses the proxy, so <code>get</code>'s <code>@Transactional</code> isn't consulted.</p></div></details>
+      <details class="reveal predict"><summary>Run <code>docker compose stop postgres</code>, then <code>docker compose restart payment-api</code>. What is the bottom-most <code>Caused by</code>?</summary><div><p><code>java.net.UnknownHostException: postgres</code>. A stopped container's name disappears from the network's DNS, so the driver can't even find an address. Read Java cause chains from the bottom: that's the root cause. Start PostgreSQL again with <code>docker compose start postgres</code>.</p></div></details>
+      <details class="reveal predict"><summary>Run <code>docker compose down</code>, then <code>up</code> again. Are your accounts still there? And after <code>down -v</code>?</summary><div><p>After <code>down</code>: yes. The containers were removed, but the <code>pgdata</code> volume was kept. After <code>down -v</code>: no. The volume was deleted, and the next startup's Flyway log says it migrated the schema from scratch.</p></div></details>
+    </div>
+
+    <div class="prose">
+      <h2 id="h-quiz" data-short="Quiz">Check your understanding</h2>
+    </div>
+    <div class="quiz" data-quiz="hood">
+      <div class="q" data-answer="c">
+        <p class="q-text">What does the <code>@Transactional</code> annotation itself do when <code>open()</code> is called?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">It runs BEGIN before the method and COMMIT after</button></li>
+          <li><button data-opt="b">It makes the Java compiler insert transaction code</button></li>
+          <li><button data-opt="c">Nothing. It is a label; Spring's proxy reads it and does the work</button></li>
+          <li><button data-opt="d">It locks the database table</button></li>
+        </ul>
+        <p class="q-why" hidden>Annotations are metadata. At startup Spring finds the label and wraps the bean in a generated subclass, and that subclass begins and ends transactions. Create the object with <code>new</code> and nothing happens.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">The bean list shows <code>accountService</code> with type <code>AccountService$$SpringCGLIB$$0</code>. What is that?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">A copy of AccountService made for each request</button></li>
+          <li><button data-opt="b">A subclass Spring generated at startup that wraps your methods in transactions</button></li>
+          <li><button data-opt="c">A compiled version of AccountService for faster execution</button></li>
+          <li><button data-opt="d">A mock used by tests</button></li>
+        </ul>
+        <p class="q-why" hidden>It is a proxy: one object for the whole app, generated as bytecode by CGLIB. It overrides public methods, calls the transaction interceptor, then delegates to your real object.</p>
+      </div>
+      <div class="q" data-answer="d">
+        <p class="q-text">In the debug log of a create, when is <code>insert into account</code> sent to PostgreSQL?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">When <code>entityManager.persist()</code> is called</button></li>
+          <li><button data-opt="b">When <code>Account.open()</code> generates the id</button></li>
+          <li><button data-opt="c">When the controller returns the 201</button></li>
+          <li><button data-opt="d">At commit, after <code>open()</code> has returned, when Hibernate flushes</button></li>
+        </ul>
+        <p class="q-why" hidden><code>persist</code> only adds the entity to the persistence context and queues the INSERT. The log shows <code>committing</code>, then the INSERT. That is also why a constraint violation surfaces at commit time.</p>
+      </div>
+      <div class="q" data-answer="a">
+        <p class="q-text"><code>balance()</code> calls <code>get()</code> in the same class. Both are <code>@Transactional</code>. How many transactions does the proxy start?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">One. The inner call is <code>this.get()</code> on the real object and never passes through the proxy</button></li>
+          <li><button data-opt="b">Two, one nested inside the other</button></li>
+          <li><button data-opt="c">Two, one after the other</button></li>
+          <li><button data-opt="d">None, because read-only methods don't use transactions</button></li>
+        </ul>
+        <p class="q-why" hidden>Self-invocation bypasses the proxy. The recorded log has a single <code>Creating new transaction … balance</code> line and no line for <code>get</code>.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">Which layer actually sends SQL bytes to PostgreSQL?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">JPA</button></li>
+          <li><button data-opt="b">Spring's <code>JpaTransactionManager</code></button></li>
+          <li><button data-opt="c">The PostgreSQL JDBC driver, using a connection borrowed from HikariCP</button></li>
+          <li><button data-opt="d">Flyway</button></li>
+        </ul>
+        <p class="q-why" hidden>JPA is a specification with no implementation. Hibernate generates the SQL and hands it to JDBC. The driver speaks PostgreSQL's network protocol over a pooled connection. Flyway uses the same driver, but only at startup.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">Why does <code>DB_URL</code> in <code>compose.yaml</code> say <code>postgres:5432</code> and not <code>localhost:5432</code>?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">PostgreSQL refuses connections from localhost</button></li>
+          <li><button data-opt="b">Inside a container, localhost is that container. Compose's DNS resolves the service name postgres to the database container</button></li>
+          <li><button data-opt="c">localhost only works on Linux</button></li>
+          <li><button data-opt="d">It is a security setting in PostgreSQL</button></li>
+        </ul>
+        <p class="q-why" hidden>Each container has its own network address. Compose puts both on one network and resolves service names; the recording shows <code>postgres</code> resolving to 172.18.0.2.</p>
+      </div>
+      <div class="q" data-answer="d">
+        <p class="q-text">You change one Java file and rebuild the image. Which slow step does the real Dockerfile skip?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Compiling the code</button></li>
+          <li><button data-opt="b">Copying the JAR into the runtime image</button></li>
+          <li><button data-opt="c">Nothing; every step reruns</button></li>
+          <li><button data-opt="d">Downloading dependencies, because <code>pom.xml</code> is copied and resolved before the source</button></li>
+        </ul>
+        <p class="q-why" hidden>The cache only misses from the first changed step onward. Since <code>COPY pom.xml</code> and <code>dependency:go-offline</code> come before <code>COPY src</code>, they stay cached. The recording shows them as <code>CACHED</code>.</p>
+      </div>
+      <div class="q" data-answer="a">
+        <p class="q-text">A startup fails with five nested <code>Caused by</code> lines. Where is the root cause?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">The last <code>Caused by</code>, at the bottom</button></li>
+          <li><button data-opt="b">The first line</button></li>
+          <li><button data-opt="c">The line with the most text</button></li>
+          <li><button data-opt="d">The line mentioning Spring</button></li>
+        </ul>
+        <p class="q-why" hidden>Each layer wraps the error from the layer below. In the recorded PostgreSQL-stopped startup, the top says <code>entityManagerFactory</code> failed, and the bottom says <code>UnknownHostException: postgres</code>.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">Why can a single <code>AccountController</code> object safely serve many requests at the same time?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Tomcat makes a new controller for each request</button></li>
+          <li><button data-opt="b">Requests are processed one at a time</button></li>
+          <li><button data-opt="c">It holds no per-request data, only a final reference to another shared bean, so threads have nothing to fight over</button></li>
+          <li><button data-opt="d">Spring locks it during each request</button></li>
+        </ul>
+        <p class="q-why" hidden>Beans are singletons shared across Tomcat's worker threads. Per-request data lives in local variables and records. A mutable field on a bean would be a concurrency bug.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">The migrations are in <code>src/main/resources/db/migration</code>, but the container has no source code. How does Flyway find them?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Compose mounts the source folder into the container</button></li>
+          <li><button data-opt="b">Maven copies them into the JAR (<code>BOOT-INF/classes/db/migration</code>), and Flyway reads them from the classpath</button></li>
+          <li><button data-opt="c">Hibernate generates them</button></li>
+          <li><button data-opt="d">They are downloaded from GitHub at startup</button></li>
+        </ul>
+        <p class="q-why" hidden>Everything under <code>src/main/resources</code> ships in the JAR next to the classes. The recorded JAR listing shows both SQL files.</p>
+      </div>
+    </div>
+
+    <nav class="chapter-nav prose" aria-label="Chapter navigation">
+      <a href="#ch-02"><small>Back to</small>Chapter 2 · Accounts</a>
+      <a class="next" href="#glossary"><small>Next</small>Glossary</a>
+    </nav>
   </section>
 
   <!-- ================================================================ CHAPTER 1 -->
@@ -105,6 +778,7 @@
         <li><b>Docker Compose</b> starts that image next to PostgreSQL, wires up the network and environment variables, and waits until the database is healthy.</li>
         <li><b><button class="term" data-term="flyway">Flyway</button></b> keeps the database schema under version control, so every environment has the same tables.</li>
       </ul>
+      <div class="callout"><p><b>Go deeper.</b> New to containers, the JVM or Spring? <a href="#hood" data-jump="h-stack">Under the hood</a> opens every layer of the running system with recorded output: what's inside the JAR, which user the process runs as, how the API finds the database by name.</p></div>
     </div>
 
     <div class="prose"><h2 id="c1-startup" data-short="Startup sequence">What happens before the first request</h2></div>
@@ -124,37 +798,51 @@
         "lanes": [
           {"name": "JVM", "detail": "java -jar app.jar"},
           {"name": "Spring context", "detail": "@SpringBootApplication"},
+          {"name": "Tomcat initialized", "detail": "port not open yet"},
+          {"name": "HikariCP", "detail": "connection pool"},
           {"name": "Flyway", "detail": "db/migration/*.sql"},
           {"name": "Hibernate", "detail": "ddl-auto: validate"},
-          {"name": "Tomcat", "detail": ":8080"},
-          {"name": "Actuator", "detail": "/actuator/health"}
+          {"name": "Tomcat started", "detail": ":8080 open"}
         ],
         "scenarios": [
           {"label": "Normal start", "request": "$ docker compose up\n# container runs: java -jar /app/app.jar (as user 'app')",
            "steps": [
-             {"lane": 0, "text": "The JVM loads the executable JAR built by Maven and calls PaymentApiApplication.main().", "log": "$ java -jar /app/app.jar"},
-             {"lane": 1, "text": "Spring reads application.yml, scans dev.p2plab.payments for components and wires them together.", "log": "Starting PaymentApiApplication using Java 21"},
-             {"lane": 2, "text": "Flyway connects to PostgreSQL and compares db/migration with the flyway_schema_history table. New scripts run in version order.", "log": "Current version of schema \"public\": 2"},
-             {"lane": 3, "text": "Hibernate checks every @Entity against the real tables. It never changes the schema; Flyway owns that.", "log": "Schema \"public\" is up to date. No migration necessary."},
-             {"lane": 4, "text": "Tomcat binds port 8080. From now on the process accepts HTTP requests.", "log": "Tomcat started on port 8080 (http) with context path '/'"},
-             {"lane": 5, "text": "Health checks report UP: the app is alive and its database is reachable.", "log": "Started PaymentApiApplication in 3.314 seconds"}
+             {"lane": 0, "text": "The JVM loads the executable JAR built by Maven and calls PaymentApiApplication.main().", "log": "Starting PaymentApiApplication v0.1.0-SNAPSHOT using Java 21.0.12.1 with PID 1 (/app/app.jar started by app in /app)",
+              "deep": "The JAR's manifest names <code>Main-Class: org.springframework.boot.loader.launch.JarLauncher</code>, so Spring Boot's launcher starts first. It makes the libraries nested inside the JAR loadable, then calls our <code>main</code>.\n\n<code>PID 1</code>: Java is the container's first process. <code>started by app</code>: it runs as the unprivileged user from the Dockerfile. Explore these layers in <a href=\"#hood\" data-jump=\"h-stack\">Under the hood</a>."},
+             {"lane": 1, "text": "Spring reads application.yml, scans dev.p2plab.payments for components and wires them together.", "log": "No active profile set, falling back to 1 default profile: \"default\"",
+              "deep": "Spring creates its container and writes a recipe for each class annotated <code>@RestController</code>, <code>@Service</code>, <code>@Repository</code> or <code>@Configuration</code>. Auto-configuration then adds recipes for the libraries it finds: Tomcat, Jackson, HikariCP, Flyway, Hibernate. Objects are built later, dependencies first.\n\n<b>Profiles</b> are named sets of configuration, such as <code>test</code> or <code>prod</code>. We use none yet."},
+             {"lane": 2, "text": "Tomcat is created and reserves port 8080, but doesn't accept connections yet.", "log": "Tomcat initialized with port 8080 (http)\nStarting Servlet engine: [Apache Tomcat/10.1.40]",
+              "deep": "Tomcat is a library inside this JVM. It is created early so that the web parts of Spring have something to register with. Requests are refused until the last step."},
+             {"lane": 3, "text": "The pool opens its first connection to PostgreSQL.", "log": "HikariPool-1 - Starting...\nHikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@5f45bc8e\nHikariPool-1 - Start completed.",
+              "deep": "HikariCP keeps database connections open and lends them out, because opening one per request would be slow. The connection goes to <code>postgres:5432</code>: Compose's network resolves the service name <code>postgres</code> to the database container."},
+             {"lane": 4, "text": "Flyway compares db/migration with the flyway_schema_history table. New scripts run in version order.", "log": "Successfully validated 2 migrations (execution time 00:00.017s)\nCurrent version of schema \"public\": 2\nSchema \"public\" is up to date. No migration necessary.",
+              "deep": "<b>Validated</b> means each applied file's checksum still matches the history table. <b>Up to date</b> means there is no file with a version above 2. On a brand-new database, Flyway would run V1 and V2 here."},
+             {"lane": 5, "text": "Hibernate checks every @Entity against the real tables. It never changes the schema; Flyway owns that.", "log": "HHH000412: Hibernate ORM core version 6.6.13.Final\nInitialized JPA EntityManagerFactory for persistence unit 'default'",
+              "deep": "Hibernate is deliberately built after Flyway: Spring's dependency graph says <code>entityManagerFactory</code> depends on <code>flywayInitializer</code>. Validating before migrating would compare the entities against an old schema."},
+             {"lane": 6, "text": "Every component was built, so Tomcat starts listening. The app is ready.", "log": "Tomcat started on port 8080 (http) with context path '/'\nStarted PaymentApiApplication in 3.35 seconds (process running for 3.718)",
+              "deep": "From now on, Actuator's <code>/actuator/health</code> reports <code>UP</code>, including a database check. A request can never reach a half-built application, because the port opens last."}
            ],
            "result": {"ok": true, "status": "UP", "summary": "Ready for requests. Payments are still disabled."}},
           {"label": "PostgreSQL stopped", "request": "$ docker compose stop postgres\n$ docker compose restart payment-api",
            "steps": [
-             {"lane": 0, "text": "The JVM starts normally. Building the image never needed a database.", "log": "$ java -jar /app/app.jar"},
-             {"lane": 1, "text": "Spring begins wiring components. The DataSource is configured but not yet used.", "log": "Starting PaymentApiApplication using Java 21"},
-             {"lane": 2, "fail": true, "text": "Flyway needs a connection before anything else can run, and there is no database to connect to. Startup aborts here.", "log": "FlywaySqlException: Unable to obtain connection from database"}
+             {"lane": 0, "text": "The JVM starts normally. Building the image never needed a database.", "log": "Starting PaymentApiApplication v0.1.0-SNAPSHOT using Java 21.0.12.1 with PID 1 (/app/app.jar started by app in /app)"},
+             {"lane": 1, "text": "Spring begins wiring components. The DataSource is configured but not yet used.", "log": "No active profile set, falling back to 1 default profile: \"default\""},
+             {"lane": 2, "text": "Tomcat is initialized as usual.", "log": "Tomcat initialized with port 8080 (http)"},
+             {"lane": 3, "text": "The pool tries to open its first connection, on Flyway's behalf.", "log": "HikariPool-1 - Starting..."},
+             {"lane": 4, "fail": true, "text": "Flyway needs a connection before anything else can run, and there is no database to connect to. Startup aborts here.", "log": "Application run failed\nError creating bean with name 'entityManagerFactory' …\n  Failed to initialize dependency 'flywayInitializer' …\nCaused by: …BeanCreationException: Error creating bean with name 'flywayInitializer' …\nCaused by: org.flywaydb.core.internal.exception.FlywaySqlException: Unable to obtain connection from database: The connection attempt failed.\nCaused by: org.postgresql.util.PSQLException: The connection attempt failed.\nCaused by: java.net.UnknownHostException: postgres",
+              "deep": "Read a cause chain from the <b>bottom</b>. Each layer wraps the error from the layer beneath: Spring couldn't build <code>entityManagerFactory</code> because <code>flywayInitializer</code> failed, because Flyway got no connection, because the driver's attempt failed, because <b>the hostname <code>postgres</code> doesn't exist</b>.\n\nIt's not \"connection refused\": a stopped container's name is removed from the Compose network's DNS, so there's no address to try at all."}
            ],
-           "result": {"ok": false, "status": "Exited", "summary": "Tomcat never started, so nothing listens on 8080. The image is fine; the runtime dependency is missing."}},
+           "result": {"ok": false, "status": "Exited (1)", "summary": "Tomcat never started, so nothing listens on 8080. The image is fine; the runtime dependency is missing."}},
           {"label": "Entity doesn't match schema", "request": "# AccountEntity maps display_name as \"name\"\n$ docker compose up --build",
            "steps": [
-             {"lane": 0, "text": "The JVM starts.", "log": "$ java -jar /app/app.jar"},
-             {"lane": 1, "text": "Spring wires components.", "log": "Starting PaymentApiApplication using Java 21"},
-             {"lane": 2, "text": "Flyway finds the schema up to date. The SQL is correct.", "log": "Schema \"public\" is up to date. No migration necessary."},
-             {"lane": 3, "fail": true, "text": "Hibernate looks for a column named name in table account and does not find one. It refuses to start rather than fail later on the first query.", "log": "Schema-validation: missing column [name] in table [account]"}
+             {"lane": 0, "text": "The JVM starts.", "log": "Starting PaymentApiApplication v0.1.0-SNAPSHOT using Java 21.0.12.1"},
+             {"lane": 1, "text": "Spring wires components."},
+             {"lane": 3, "text": "The pool connects.", "log": "HikariPool-1 - Start completed."},
+             {"lane": 4, "text": "Flyway finds the schema up to date. The SQL is correct.", "log": "Schema \"public\" is up to date. No migration necessary."},
+             {"lane": 5, "fail": true, "text": "Hibernate looks for a column named name in table account and does not find one. It refuses to start rather than fail later on the first query.", "log": "Failed to initialize JPA EntityManagerFactory: [PersistenceUnit: default]\nUnable to build Hibernate SessionFactory; nested exception is\norg.hibernate.tool.schema.spi.SchemaManagementException:\nSchema-validation: missing column [name] in table [account]",
+              "deep": "Recorded by changing <code>@Column(name = \"display_name\")</code> to <code>\"name\"</code> in a copy of the code. With <code>ddl-auto: update</code>, Hibernate would instead have added an empty <code>name</code> column: an unreviewed schema change in whatever database it was pointed at."}
            ],
-           "result": {"ok": false, "status": "Exited", "summary": "Mapping mistakes are caught at startup, not by a customer. (You will try this in Chapter 2, exercise 3.)"}}
+           "result": {"ok": false, "status": "Exited (1)", "summary": "Mapping mistakes are caught at startup, not by a customer. (You will try this in Chapter 2, exercise 3.)"}}
         ]
       }
       </script>
@@ -268,27 +956,34 @@ ENTRYPOINT ["java", "-jar", "/app/app.jar"]
         "scenarios": [
           {"label": "GET capabilities", "request": "GET /api/v1/payments/capabilities",
            "steps": [
-             {"lane": 0, "text": "curl opens a TCP connection to port 8080 and sends the request line and headers."},
-             {"lane": 1, "text": "Tomcat parses the bytes into an HttpServletRequest and hands it to a worker thread.", "log": "GET /api/v1/payments/capabilities HTTP/1.1"},
-             {"lane": 2, "text": "Spring looks up a handler: GET + /api/v1/payments/capabilities matches capabilities().", "log": "→ CapabilitiesController#capabilities()"},
-             {"lane": 3, "text": "The method builds a Map. No database call, no side effects."},
-             {"lane": 4, "text": "Jackson serializes the Map to JSON and sets Content-Type: application/json.", "log": "{\"paymentProcessingEnabled\":false,\"chapter\":2,...}"},
+             {"lane": 0, "text": "curl opens a TCP connection to port 8080 and sends the request line and headers.",
+              "deep": "Docker Desktop forwards <code>localhost:8080</code> on your computer into the container, because <code>compose.yaml</code> maps <code>\"8080:8080\"</code>. What travels is plain text: <code>GET /api/v1/payments/capabilities HTTP/1.1</code>, a few headers, then a blank line."},
+             {"lane": 1, "text": "Tomcat parses the bytes into an HttpServletRequest and hands it to a worker thread.",
+              "deep": "Tomcat keeps a pool of worker <button class=\"term\" data-term=\"thread\">threads</button> and runs each request on one of them, from start to finish. Every log line of this request is tagged with that thread's name, here <code>nio-8080-exec-1</code>."},
+             {"lane": 2, "text": "Spring looks up a handler: GET + /api/v1/payments/capabilities matches capabilities().", "log": "[nio-8080-exec-1] DispatcherServlet : GET \"/api/v1/payments/capabilities\", parameters={}\n[nio-8080-exec-1] RequestMappingHandlerMapping : Mapped to dev.p2plab.payments.api.CapabilitiesController#capabilities()",
+              "deep": "<code>DispatcherServlet</code> is the only servlet Tomcat knows about; every request goes through it. It consults a route table built at startup from every <code>@GetMapping</code>, <code>@PostMapping</code> and <code>@RequestMapping</code>.\n\nOn the very first request after startup, the log also shows <code>Initializing Servlet 'dispatcherServlet'</code>: Spring finishes setting it up lazily."},
+             {"lane": 3, "text": "The method builds a Map. No database call, no side effects.",
+              "deep": "The controller is a Spring <button class=\"term\" data-term=\"bean\">bean</button>: one object, created at startup and shared by every request. <code>Map.of</code> builds an immutable map, so sharing it is safe too."},
+             {"lane": 4, "text": "Jackson serializes the Map to JSON and sets Content-Type: application/json.", "log": "[nio-8080-exec-1] RequestResponseBodyMethodProcessor : Using 'application/json', given [*/*] and supported [application/json, application/*+json]\n[nio-8080-exec-1] RequestResponseBodyMethodProcessor : Writing [{paymentProcessingEnabled=false, chapter=2, service=p2p-payments-lab, accountsEnabled=true}]\n[nio-8080-exec-1] DispatcherServlet : Completed 200 OK",
+              "deep": "<b>Content negotiation</b>: curl sent <code>Accept: */*</code> (anything), and the method can produce JSON, so JSON it is. <code>Map.of</code> has no defined order, which is why the fields come out in a different order from the source code. JSON objects are unordered, so clients must not depend on it."},
              {"lane": 0, "text": "curl prints the body."}
            ],
            "result": {"ok": true, "status": "200 OK", "summary": "Discovery works, and it says payments are disabled."}},
           {"label": "POST /api/v1/payments", "request": "POST /api/v1/payments",
            "steps": [
              {"lane": 0, "text": "Someone tries to send a payment."},
-             {"lane": 1, "text": "Tomcat parses the request as usual.", "log": "POST /api/v1/payments HTTP/1.1"},
-             {"lane": 2, "fail": true, "text": "No controller maps this path. Spring falls back to its static-file handler, which finds nothing either.", "log": "No static resource api/v1/payments."},
+             {"lane": 1, "text": "Tomcat parses the request as usual."},
+             {"lane": 2, "fail": true, "text": "No controller maps this path. Spring falls back to its static-file handler, which finds nothing either.", "log": "[nio-8080-exec-3] DispatcherServlet : POST \"/api/v1/payments\", parameters={}\n[nio-8080-exec-3] ExceptionHandlerExceptionResolver : Resolved [org.springframework.web.servlet.resource.NoResourceFoundException: No static resource api/v1/payments.]\n[nio-8080-exec-3] DispatcherServlet : Completed 404 NOT_FOUND",
+              "deep": "Note there is no <code>Mapped to …</code> line. When no controller matches, Spring tries to serve a static file (images, HTML) from the classpath, finds none, and throws <code>NoResourceFoundException</code>. That's why the 404 detail talks about a \"static resource\"."},
              {"lane": 0, "text": "The client gets a problem response instead of a payment."}
            ],
            "result": {"ok": false, "status": "404 Not Found", "summary": "There is no payments endpoint yet, by design."}},
           {"label": "POST capabilities", "request": "POST /api/v1/payments/capabilities",
            "steps": [
              {"lane": 0, "text": "The right path with the wrong method."},
-             {"lane": 1, "text": "Tomcat parses the request.", "log": "POST /api/v1/payments/capabilities HTTP/1.1"},
-             {"lane": 2, "fail": true, "text": "The path is mapped, but only for GET. Spring answers 405 and lists what is allowed.", "log": "Method 'POST' is not supported.  (Allow: GET)"},
+             {"lane": 1, "text": "Tomcat parses the request."},
+             {"lane": 2, "fail": true, "text": "The path is mapped, but only for GET. Spring answers 405 and lists what is allowed.", "log": "[nio-8080-exec-5] DispatcherServlet : POST \"/api/v1/payments/capabilities\", parameters={}\n[nio-8080-exec-5] PageNotFound : Request method 'POST' is not supported\n[nio-8080-exec-5] DispatcherServlet : Completed 405 METHOD_NOT_ALLOWED",
+              "deep": "The route table knows this path, but only with <code>GET</code>. Spring therefore answers 405 rather than 404, and adds the header <code>Allow: GET</code> (recorded with <code>curl -i</code>)."},
              {"lane": 0, "text": "The Allow header tells the client which method would have worked."}
            ],
            "result": {"ok": false, "status": "405 Method Not Allowed", "summary": "404 means no such resource; 405 means the resource exists but not for that verb."}}
@@ -480,7 +1175,8 @@ public record Money(long amountMinor, Currency currency) {
           <tr><td><code>account.persistence</code></td><td>Implement the repository <button class="term" data-term="port">port</button> with JPA.</td><td>Be visible outside its package</td></tr>
         </tbody>
       </table></div>
-      <p>Watch a request cross them. Pick a scenario, press Play, and notice how far each bad request gets.</p>
+      <p>Watch a request cross them. Pick a scenario, press Play, and notice how far each bad request gets. Use <b>Step</b> to read the <b>Under the hood</b> box at each stop. The log lines are the app's real debug output.</p>
+      <div class="callout"><p><b>Go deeper.</b> Two things in this trace surprise most people: the <code>AccountService</code> the controller calls is a generated <a href="#hood" data-jump="h-proxy">proxy</a>, and the INSERT isn't sent until <a href="#hood" data-jump="h-jpa">commit time</a>. Both are animated in Under the hood.</p></div>
     </div>
 
     <div class="fig tracer">
@@ -507,71 +1203,94 @@ public record Money(long amountMinor, Currency currency) {
           {"name": "PostgreSQL", "detail": "V2__accounts.sql"}
         ],
         "scenarios": [
-          {"label": "Create an account", "request": "POST /api/v1/accounts\nContent-Type: application/json\n\n{\"displayName\": \"  Alice Example \", \"currency\": \"USD\"}",
+          {"label": "Create an account", "request": "POST /api/v1/accounts HTTP/1.1\nHost: localhost:8080\nContent-Type: application/json\n\n{\"displayName\":\"  Alice Example \",\"currency\":\"USD\"}",
            "steps": [
-             {"lane": 0, "text": "The client sends JSON. Note the stray spaces around the name."},
-             {"lane": 1, "text": "POST /api/v1/accounts matches AccountController.open()."},
-             {"lane": 2, "text": "Jackson builds a CreateAccountRequest. @NotBlank, @Size(max = 80) and @Pattern(\"USD\") all pass."},
-             {"lane": 3, "text": "The controller converts \"USD\" to Currency.USD and calls the service. That is all it does."},
-             {"lane": 4, "text": "Spring's transaction proxy begins a database transaction before the method body runs.", "log": "BEGIN"},
-             {"lane": 5, "text": "Account.open() picks a random UUID, strips the name to \"Alice Example\", and reads the clock, truncated to microseconds."},
-             {"lane": 6, "text": "entityManager.persist() queues an INSERT. Nothing is sent yet."},
-             {"lane": 4, "text": "Still inside the transaction, the service logs the new id but not the name, because names are personal data. Nothing is committed yet.", "log": "INFO account opened accountId=ba9126e5-… currency=USD"},
-             {"lane": 4, "text": "The method returns, so Spring commits. Hibernate flushes the queued INSERT first."},
-             {"lane": 7, "text": "PostgreSQL checks the constraints: currency = 'USD', name not blank. The row is written.", "log": "INSERT INTO account (created_at, currency, display_name, id) VALUES (...)\nCOMMIT"},
-             {"lane": 3, "text": "ResponseEntity.created() sets status 201 and a Location header pointing at the new account."},
-             {"lane": 0, "text": "The client receives the account, including its server-assigned id."}
+             {"lane": 0, "text": "The client sends JSON. Note the stray spaces around the name.",
+              "deep": "curl opens a TCP connection to <code>localhost:8080</code>. Docker Desktop forwards it into the container because of <code>\"8080:8080\"</code> in <code>compose.yaml</code>.\n\nAn HTTP request is plain text: a request line, headers, a blank line, then the body. curl also adds a <code>Content-Length</code> header saying how many bytes of body follow. <code>Content-Type: application/json</code> tells the server how to interpret them."},
+             {"lane": 1, "text": "POST /api/v1/accounts matches AccountController.open().", "log": "[nio-8080-exec-5] DispatcherServlet : POST \"/api/v1/accounts\", parameters={}\n[nio-8080-exec-5] RequestMappingHandlerMapping : Mapped to dev.p2plab.payments.account.api.AccountController#open(CreateAccountRequest)",
+              "deep": "Tomcat reads the bytes, builds an <code>HttpServletRequest</code> object, and hands it to a worker <button class=\"term\" data-term=\"thread\">thread</button> from its pool. This one is <code>nio-8080-exec-5</code>; every later line of this request carries that name.\n\nTomcat knows only one servlet: Spring's <code>DispatcherServlet</code>. It looks up the method + path in the route table that <code>RequestMappingHandlerMapping</code> built at startup from the <code>@PostMapping</code> and <code>@GetMapping</code> annotations."},
+             {"lane": 2, "text": "Jackson builds a CreateAccountRequest. @NotBlank, @Size(max = 80) and @Pattern(\"USD\") all pass.", "log": "[nio-8080-exec-5] RequestResponseBodyMethodProcessor : Read \"application/json;charset=UTF-8\" to [CreateAccountRequest[displayName=  Alice Example , currency=USD]]",
+              "deep": "<code>@RequestBody</code> means \"build this parameter from the body\". Spring picks a converter by <code>Content-Type</code>: for <code>application/json</code>, Jackson. Jackson matches JSON field names to the record's components and calls its constructor. The spaces are still there; nothing has stripped them yet.\n\nThen <code>@Valid</code> hands the object to Hibernate Validator, which reads <code>@NotBlank</code>, <code>@Size</code> and <code>@Pattern</code> using <button class=\"term\" data-term=\"reflection\">reflection</button>.\n\nNotice that this debug line prints the name. With debug logging on, personal data reaches the logs even though our code never logs it."},
+             {"lane": 3, "text": "The controller converts \"USD\" to Currency.USD and calls the service. That is all it does.",
+              "deep": "The controller is a singleton <button class=\"term\" data-term=\"bean\">bean</button>: one object, shared by every request on every thread. That is safe because its only field is a <code>final</code> reference to another bean, and all per-request data lives in local variables.\n\nThe <code>accountService</code> field actually holds Spring's generated proxy, <code>AccountService$$SpringCGLIB$$0</code>. See <a href=\"#hood\" data-jump=\"h-proxy\">Under the hood</a>."},
+             {"lane": 4, "text": "The proxy begins a transaction before your method body runs.", "log": "[nio-8080-exec-5] JpaTransactionManager : Creating new transaction with name [dev.p2plab.payments.account.application.AccountService.open]: PROPAGATION_REQUIRED,ISOLATION_DEFAULT\n[nio-8080-exec-5] JpaTransactionManager : Opened new EntityManager [SessionImpl(288912832<open>)] for JPA transaction\n[nio-8080-exec-5] TransactionImpl : begin",
+              "deep": "The proxy creates a fresh Hibernate <code>EntityManager</code> for this transaction, borrows a connection from the HikariCP <button class=\"term\" data-term=\"pool\">pool</button>, switches off auto-commit, and binds both to the current thread so the repository can find them later.\n\n<code>PROPAGATION_REQUIRED</code>: join an existing transaction, or start one. There was none, so a new one starts."},
+             {"lane": 5, "text": "Account.open() picks a random UUID, strips the name to \"Alice Example\", and reads the clock, truncated to microseconds.",
+              "deep": "Pure Java: no Spring, no database. The compact constructor of the <code>Account</code> record runs <code>isBlank()</code>, <code>strip()</code> and the length check. <code>UUID.randomUUID()</code> uses a cryptographically strong random generator, so ids can't be guessed."},
+             {"lane": 6, "text": "entityManager.persist() queues an INSERT. Nothing is sent yet.",
+              "deep": "<code>AccountEntity.from(account)</code> copies the record into a mutable JPA entity. <code>persist</code> adds it to Hibernate's <button class=\"term\" data-term=\"persistence-context\">persistence context</button> and schedules an INSERT.\n\nThe evidence is an absence: the real log shows no SQL at this point. The next line is the service's own log message."},
+             {"lane": 4, "text": "Still inside the transaction, the service logs the new id but not the name, because names are personal data. Nothing is committed yet.", "log": "[nio-8080-exec-5] AccountService : account opened accountId=4806a533-ee1c-43d2-a436-2966526469c7 currency=USD",
+              "deep": "This line exists before the row does. If the commit failed now (a constraint, a lost connection), the log would still claim the account was opened. It's harmless here, but Chapter 6 deals with the general problem: never announce something before it's committed."},
+             {"lane": 4, "text": "The method returns, so Spring commits. Hibernate flushes the queued INSERT first.", "log": "[nio-8080-exec-5] JpaTransactionManager : Initiating transaction commit\n[nio-8080-exec-5] TransactionImpl : committing",
+              "deep": "Control is back in the proxy. Your method returned normally, so it commits. Before the database commit, Hibernate <button class=\"term\" data-term=\"flush\">flushes</button>: it turns its queue into SQL."},
+             {"lane": 7, "text": "PostgreSQL checks the constraints: currency = 'USD', name not blank. The row is written.", "log": "[nio-8080-exec-5] SQL : insert into account (created_at,currency,display_name,id) values (?,?,?,?)\n[nio-8080-exec-5] bind : binding parameter (1:TIMESTAMP_UTC) <- [2026-10-29T20:02:20.109795Z]\n[nio-8080-exec-5] bind : binding parameter (2:VARCHAR) <- [USD]\n[nio-8080-exec-5] bind : binding parameter (3:VARCHAR) <- [Alice Example]\n[nio-8080-exec-5] bind : binding parameter (4:UUID) <- [4806a533-ee1c-43d2-a436-2966526469c7]\n[nio-8080-exec-5] JpaTransactionManager : Closing JPA EntityManager [SessionImpl(288912832<open>)] after transaction",
+              "deep": "The SQL has <code>?</code> placeholders, and the values travel separately (a prepared statement), so no value can ever be run as SQL. The timestamp has six fractional digits: the microsecond fix at work.\n\nPostgreSQL checks both <code>CHECK</code> constraints, writes the row, and commits. Only now can other connections see it. The <code>EntityManager</code> is closed and the connection returns to the pool."},
+             {"lane": 3, "text": "ResponseEntity.created() sets status 201 and a Location header pointing at the new account.", "log": "[nio-8080-exec-5] HttpEntityMethodProcessor : Writing [AccountResponse[id=4806a533-ee1c-43d2-a436-2966526469c7, displayName=Alice Example, currency=USD, cr (truncated)...]\n[nio-8080-exec-5] DispatcherServlet : Completed 201 CREATED",
+              "deep": "Jackson serializes the <code>AccountResponse</code> record. The <code>Instant</code> becomes an ISO-8601 string like <code>2026-10-29T20:02:20.109795Z</code>, where <code>Z</code> means UTC."},
+             {"lane": 0, "text": "The client receives the account, including its server-assigned id.",
+              "deep": "The real response, as curl printed it:\n\n<code>HTTP/1.1 201</code><br><code>Location: /api/v1/accounts/ff7bd511-8003-4244-b563-f9a8f3796020</code><br><code>Content-Type: application/json</code><br><code>Transfer-Encoding: chunked</code>\n\nTomcat sends no reason phrase after <code>201</code>; HTTP/1.1 allows that, and clients go by the number."}
            ],
            "result": {"ok": true, "status": "201 Created", "summary": "Location: /api/v1/accounts/{id}. Its balance reads 0."}},
-          {"label": "Currency EUR", "request": "POST /api/v1/accounts\n\n{\"displayName\": \"Carol\", \"currency\": \"EUR\"}",
+          {"label": "Currency EUR", "request": "POST /api/v1/accounts\n\n{\"displayName\":\"Carol\",\"currency\":\"EUR\"}",
            "steps": [
              {"lane": 0, "text": "The client asks for a euro account."},
-             {"lane": 1, "text": "Routing succeeds: the path and method are fine."},
-             {"lane": 2, "fail": true, "text": "@Pattern(regexp = \"USD\") fails. Spring throws MethodArgumentNotValidException before the controller method is called.", "log": "MethodArgumentNotValidException: currency: only USD is supported"},
-             {"lane": 0, "text": "The client receives an RFC 9457 problem response."}
+             {"lane": 1, "text": "Routing succeeds: the path and method are fine.", "log": "[nio-8080-exec-1] DispatcherServlet : POST \"/api/v1/accounts\", parameters={}\n[nio-8080-exec-1] RequestMappingHandlerMapping : Mapped to dev.p2plab.payments.account.api.AccountController#open(CreateAccountRequest)"},
+             {"lane": 2, "fail": true, "text": "@Pattern(regexp = \"USD\") fails. Spring throws MethodArgumentNotValidException before the controller method is called.", "log": "[nio-8080-exec-1] RequestResponseBodyMethodProcessor : Read \"application/json;charset=UTF-8\" to [CreateAccountRequest[displayName=Carol, currency=EUR]]\n[nio-8080-exec-1] ExceptionHandlerExceptionResolver : Resolved [org.springframework.web.bind.MethodArgumentNotValidException: … Field error in object 'createAccountRequest' on field 'currency': rejected value [EUR]; … default message [only USD is supported]]",
+              "deep": "Jackson succeeded: the JSON was fine. Validation failed. Look at what is <b>missing</b> from the log: no <code>Creating new transaction</code> line. The service was never called, so no transaction began and no connection was borrowed.\n\nOur message <code>only USD is supported</code> appears in the log but not in the response."},
+             {"lane": 0, "text": "The client receives an RFC 9457 problem response.", "log": "[nio-8080-exec-1] DispatcherServlet : Completed 400 BAD_REQUEST",
+              "deep": "<code>ProblemDetailsExceptionHandler</code>, enabled by <code>spring.mvc.problemdetails.enabled: true</code>, turns the exception into <code>application/problem+json</code> with the generic detail <code>Invalid request content.</code> Spring keeps field-level details out of the response by default."}
            ],
            "result": {"ok": false, "status": "400 Bad Request", "summary": "No transaction, no SQL, no service call. The cheapest place to reject bad input."}},
-          {"label": "Blank name", "request": "POST /api/v1/accounts\n\n{\"displayName\": \"   \", \"currency\": \"USD\"}",
+          {"label": "Blank name", "request": "POST /api/v1/accounts\n\n{\"displayName\":\"   \",\"currency\":\"USD\"}",
            "steps": [
              {"lane": 0, "text": "The name is three spaces."},
-             {"lane": 1, "text": "Routing succeeds."},
-             {"lane": 2, "fail": true, "text": "@NotBlank trims and finds nothing left.", "log": "MethodArgumentNotValidException: displayName: must not be blank"},
-             {"lane": 0, "text": "400 problem response."}
+             {"lane": 1, "text": "Routing succeeds.", "log": "[nio-8080-exec-7] DispatcherServlet : POST \"/api/v1/accounts\", parameters={}"},
+             {"lane": 2, "fail": true, "text": "@NotBlank trims and finds nothing left.", "log": "[nio-8080-exec-7] RequestResponseBodyMethodProcessor : Read \"application/json;charset=UTF-8\" to [CreateAccountRequest[displayName=   , currency=USD]]\n[nio-8080-exec-7] ExceptionHandlerExceptionResolver : Resolved [org.springframework.web.bind.MethodArgumentNotValidException: … Field error in object 'createAccountRequest' on field 'displayName': rejected value [   ]; … default message [must not be blank]]",
+              "deep": "<code>@NotBlank</code> means not null, and at least one character that isn't whitespace. Three spaces fail. <code>must not be blank</code> is Hibernate Validator's built-in message for it."},
+             {"lane": 0, "text": "400 problem response.", "log": "[nio-8080-exec-7] DispatcherServlet : Completed 400 BAD_REQUEST"}
            ],
            "result": {"ok": false, "status": "400 Bad Request", "summary": "detail: \"Invalid request content.\""}},
-          {"label": "Broken JSON", "request": "POST /api/v1/accounts\n\n{\"displayName\": \"Dan\", ",
+          {"label": "Broken JSON", "request": "POST /api/v1/accounts\n\n{\"displayName\":\"Dan\", ",
            "steps": [
              {"lane": 0, "text": "The body is cut off mid-object."},
-             {"lane": 1, "text": "Routing succeeds."},
-             {"lane": 2, "fail": true, "text": "Jackson cannot parse the body at all, so validation never starts.", "log": "HttpMessageNotReadableException: JSON parse error"},
-             {"lane": 0, "text": "400 problem response."}
+             {"lane": 1, "text": "Routing succeeds.", "log": "[io-8080-exec-10] DispatcherServlet : POST \"/api/v1/accounts\", parameters={}\n[io-8080-exec-10] RequestMappingHandlerMapping : Mapped to dev.p2plab.payments.account.api.AccountController#open(CreateAccountRequest)",
+              "deep": "The thread name is cut short to <code>io-8080-exec-10</code> because Spring's log format pads or trims thread names to 15 characters. It is <code>http-nio-8080-exec-10</code> in full."},
+             {"lane": 2, "fail": true, "text": "Jackson cannot parse the body at all, so validation never starts.", "log": "[io-8080-exec-10] ExceptionHandlerExceptionResolver : Resolved [org.springframework.http.converter.HttpMessageNotReadableException: JSON parse error: Unexpected end-of-input within/between Object entries]",
+              "deep": "There is no <code>Read … to [CreateAccountRequest…]</code> line this time: no object was ever built, so there is nothing to validate."},
+             {"lane": 0, "text": "400 problem response.", "log": "[io-8080-exec-10] DispatcherServlet : Completed 400 BAD_REQUEST"}
            ],
            "result": {"ok": false, "status": "400 Bad Request", "summary": "detail: \"Failed to read request\""}},
           {"label": "Unknown id", "request": "GET /api/v1/accounts/00000000-0000-0000-0000-000000000000",
            "steps": [
              {"lane": 0, "text": "A well-formed id that doesn't exist."},
-             {"lane": 1, "text": "Matches AccountController.get()."},
-             {"lane": 2, "text": "The path segment converts to a UUID."},
+             {"lane": 1, "text": "Matches AccountController.get().", "log": "[nio-8080-exec-9] DispatcherServlet : GET \"/api/v1/accounts/00000000-0000-0000-0000-000000000000\", parameters={}\n[nio-8080-exec-9] RequestMappingHandlerMapping : Mapped to dev.p2plab.payments.account.api.AccountController#get(UUID)"},
+             {"lane": 2, "text": "The path segment converts to a UUID.",
+              "deep": "<code>@PathVariable UUID id</code>: Spring's conversion service calls the equivalent of <code>UUID.fromString</code> on the text between the slashes."},
              {"lane": 3, "text": "The controller calls accountService.get(id)."},
-             {"lane": 4, "text": "A read-only transaction starts.", "log": "BEGIN READ ONLY"},
-             {"lane": 6, "text": "entityManager.find() looks the id up."},
-             {"lane": 7, "text": "No row matches.", "log": "SELECT ... FROM account WHERE id = ?  → 0 rows"},
-             {"lane": 4, "fail": true, "text": "Optional is empty, so the service throws AccountNotFoundException."},
-             {"lane": 3, "text": "AccountExceptionHandler turns the exception into a ProblemDetail with status 404."},
-             {"lane": 0, "text": "The detail says only \"Account not found\"."}
+             {"lane": 4, "text": "A read-only transaction starts.", "log": "[nio-8080-exec-9] JpaTransactionManager : Creating new transaction with name [dev.p2plab.payments.account.application.AccountService.get]: PROPAGATION_REQUIRED,ISOLATION_DEFAULT,readOnly\n[nio-8080-exec-9] TransactionImpl : begin"},
+             {"lane": 6, "text": "entityManager.find() looks the id up.",
+              "deep": "Unlike <code>persist</code>, <code>find</code> needs an answer now, so Hibernate first checks its persistence context (empty, since this transaction is new) and then sends a SELECT straight away."},
+             {"lane": 7, "text": "No row matches.", "log": "[nio-8080-exec-9] SQL : select ae1_0.id,ae1_0.created_at,ae1_0.currency,ae1_0.display_name from account ae1_0 where ae1_0.id=?\n[nio-8080-exec-9] bind : binding parameter (1:UUID) <- [00000000-0000-0000-0000-000000000000]"},
+             {"lane": 4, "fail": true, "text": "Optional is empty, so the service throws AccountNotFoundException, and the proxy rolls back.", "log": "[nio-8080-exec-9] TransactionInterceptor : Completing transaction for [dev.p2plab.payments.account.application.AccountService.get] after exception: dev.p2plab.payments.account.application.AccountNotFoundException: Account not found: 00000000-0000-0000-0000-000000000000\n[nio-8080-exec-9] JpaTransactionManager : Initiating transaction rollback\n[nio-8080-exec-9] TransactionImpl : rolling back",
+              "deep": "Spring rolls back by default when a <code>RuntimeException</code> escapes a <code>@Transactional</code> method. The proxy then rethrows the same exception, so the web layer still sees it."},
+             {"lane": 3, "text": "AccountExceptionHandler turns the exception into a ProblemDetail with status 404.", "log": "[nio-8080-exec-9] ExceptionHandlerExceptionResolver : Using @ExceptionHandler dev.p2plab.payments.account.api.AccountExceptionHandler#notFound()",
+              "deep": "<code>@RestControllerAdvice(assignableTypes = AccountController.class)</code> registers this handler for exceptions thrown out of <code>AccountController</code> only."},
+             {"lane": 0, "text": "The detail says only \"Account not found\".", "log": "[nio-8080-exec-9] DispatcherServlet : Completed 404 NOT_FOUND"}
            ],
            "result": {"ok": false, "status": "404 Not Found", "summary": "The domain didn't need to run: there was no account to build."}},
           {"label": "Malformed id", "request": "GET /api/v1/accounts/not-a-uuid",
            "steps": [
              {"lane": 0, "text": "The id is not a UUID."},
-             {"lane": 1, "text": "Matches AccountController.get()."},
-             {"lane": 2, "fail": true, "text": "Spring cannot convert \"not-a-uuid\" to java.util.UUID, so the controller method can't be called.", "log": "MethodArgumentTypeMismatchException"},
-             {"lane": 0, "text": "400 problem response. Note that Spring's default detail echoes the bad value back."}
+             {"lane": 1, "text": "Matches AccountController.get().", "log": "[nio-8080-exec-2] DispatcherServlet : GET \"/api/v1/accounts/not-a-uuid\", parameters={}\n[nio-8080-exec-2] RequestMappingHandlerMapping : Mapped to dev.p2plab.payments.account.api.AccountController#get(UUID)",
+              "deep": "Routing matches on the path <em>pattern</em> <code>/api/v1/accounts/{id}</code>, so any text fits. Converting that text to a <code>UUID</code> comes next."},
+             {"lane": 2, "fail": true, "text": "Spring cannot convert \"not-a-uuid\" to java.util.UUID, so the controller method can't be called.", "log": "[nio-8080-exec-2] ExceptionHandlerExceptionResolver : Resolved [org.springframework.web.method.annotation.MethodArgumentTypeMismatchException: Method parameter 'id': Failed to convert value of type 'java.lang.String' to required type 'java.util.UUID'; Invalid UUID string: not-a-uuid]"},
+             {"lane": 0, "text": "400 problem response. Note that Spring's default detail echoes the bad value back.", "log": "[nio-8080-exec-2] DispatcherServlet : Completed 400 BAD_REQUEST"}
            ],
            "result": {"ok": false, "status": "400 Bad Request", "summary": "detail: \"Failed to convert 'id' with value: 'not-a-uuid'\""}},
           {"label": "Raw SQL bypass", "request": "psql> INSERT INTO account\n      VALUES (gen_random_uuid(), 'Mallory', 'EUR', now());",
            "steps": [
-             {"lane": 0, "text": "Someone skips the application entirely and writes SQL."},
+             {"lane": 0, "text": "Someone skips the application entirely and writes SQL.",
+              "deep": "psql connects straight to PostgreSQL's port. Tomcat, Spring, Jackson, Bean Validation and the <code>Account</code> record are all bypassed."},
              {"lane": 7, "fail": true, "text": "Only the database is left to object, and it does: CHECK (currency = 'USD') fails.", "log": "ERROR: new row for relation \"account\" violates check constraint \"account_currency_check\""}
            ],
            "result": {"ok": false, "status": "ERROR", "summary": "This is why rules are repeated in the schema."}}
@@ -985,7 +1704,7 @@ curl http://localhost:8080/api/v1/accounts/&lt;id&gt;/balance</pre></div>
 
     <nav class="chapter-nav prose" aria-label="Chapter navigation">
       <a href="#ch-01"><small>Previous</small>Chapter 1 · Runnable service</a>
-      <a class="next" href="#glossary"><small>Next</small>Glossary</a>
+      <a class="next" href="#hood"><small>Next</small>Under the hood</a>
     </nav>
   </section>
 
@@ -996,18 +1715,46 @@ curl http://localhost:8080/api/v1/accounts/&lt;id&gt;/balance</pre></div>
       <h1>Glossary</h1>
       <p class="lede">Every underlined term in the book links here. Definitions describe how this project uses the word.</p>
       <dl class="glossary">
+        <dt id="term-annotation">Annotation</dt>
+        <dd>A label in Java source, such as <code>@Transactional</code>, stored in the compiled class. It does nothing on its own; a framework or the compiler reads it and acts. See <a href="#hood" data-jump="h-java">Under the hood</a>.</dd>
+        <dt id="term-auto-config">Auto-configuration</dt>
+        <dd>Spring Boot's conditional setup: configuration classes that apply only when their conditions hold, usually "this library is on the classpath". It is why adding Flyway to <code>pom.xml</code> was enough to make migrations run.</dd>
         <dt id="term-available-balance">Available balance</dt>
         <dd>What can be spent right now: the ledger balance minus holds, which are funds reserved for payments still in flight. Holds arrive with payments in Chapter 4.</dd>
+        <dt id="term-bean">Bean</dt>
+        <dd>An object created and managed by the Spring container, normally one per application (a singleton) and shared by every request. This app has 372, of which 8 come from our code.</dd>
         <dt id="term-bean-validation">Bean Validation</dt>
         <dd>The Jakarta standard for declaring input rules with annotations such as <code>@NotBlank</code> and <code>@Size</code>. Spring checks them when a parameter is marked <code>@Valid</code>.</dd>
+        <dt id="term-pool">Connection pool</dt>
+        <dd>A set of database connections opened in advance and lent out per transaction, because opening one per request is slow. This project uses HikariCP with its default of 10.</dd>
+        <dt id="term-container">Container</dt>
+        <dd>A Linux process started from an image and isolated from others: its own filesystem view, network address and process list. It shares the host's kernel, which makes it much lighter than a virtual machine.</dd>
         <dt id="term-contract">Contract test</dt>
         <dd>A test of an interface's promises (status codes, field names, validation) with the code behind it replaced by a mock. Fast, but blind to the real implementation.</dd>
         <dt id="term-di">Dependency injection</dt>
         <dd>Classes receive their collaborators through the constructor instead of creating them. Spring builds the objects and passes them in, which makes swapping a fake in tests easy.</dd>
+        <dt id="term-fat-jar">Fat JAR</dt>
+        <dd>A JAR that contains the application's classes and every library it needs, so <code>java -jar app.jar</code> runs with nothing else installed except Java. Spring Boot's is started by its own <code>JarLauncher</code>.</dd>
+        <dt id="term-flush">Flush</dt>
+        <dd>The moment Hibernate turns its queue of pending changes into SQL and sends it to the database. Normally just before commit, and before any query that could see the pending changes.</dd>
         <dt id="term-flyway">Flyway</dt>
         <dd>A tool that applies versioned SQL migration files in order and records each one in the <code>flyway_schema_history</code> table.</dd>
+        <dt id="term-hibernate">Hibernate</dt>
+        <dd>The JPA implementation this project uses: an ORM (object-relational mapper) that tracks entity objects, generates SQL for them, and turns result rows back into objects.</dd>
         <dt id="term-idempotency">Idempotency</dt>
         <dd>The property that doing something twice has the same effect as doing it once. Payment APIs achieve it with a client-supplied key, so a retried request returns the original result instead of paying twice.</dd>
+        <dt id="term-image">Image</dt>
+        <dd>A read-only template for containers: a stack of filesystem layers plus settings such as the user and the start command. Built from a Dockerfile.</dd>
+        <dt id="term-ioc">IoC container</dt>
+        <dd>"Inversion of control": instead of your code creating its collaborators, a container creates them and passes them in. In Spring, the container is the application context, and the objects are beans.</dd>
+        <dt id="term-jdbc">JDBC</dt>
+        <dd>Java's built-in low-level database API (<code>Connection</code>, <code>PreparedStatement</code>, <code>ResultSet</code>). Each database ships a driver that implements it. Hibernate and Flyway use it; our code doesn't.</dd>
+        <dt id="term-jpa">JPA</dt>
+        <dd>Jakarta Persistence: a specification of interfaces and annotations (<code>EntityManager</code>, <code>@Entity</code>) for storing Java objects in relational databases. It contains no implementation; Hibernate provides one.</dd>
+        <dt id="term-jvm">JVM and bytecode</dt>
+        <dd>The Java Virtual Machine runs bytecode: the instructions in <code>.class</code> files that <code>javac</code> produces. It loads classes on demand and compiles hot code to machine code while running.</dd>
+        <dt id="term-layer">Layer (Docker)</dt>
+        <dd>One slice of an image's filesystem, produced by one Dockerfile instruction. Layers are cached and shared, so an unchanged step is reused on the next build.</dd>
         <dt id="term-ledger-balance">Ledger balance</dt>
         <dd>The sum of all postings to an account. Computed, never typed in.</dd>
         <dt id="term-migration">Migration</dt>
@@ -1016,16 +1763,24 @@ curl http://localhost:8080/api/v1/accounts/&lt;id&gt;/balance</pre></div>
         <dd>The smallest unit of a currency. For USD it is the cent, so $12.34 is 1234 minor units.</dd>
         <dt id="term-multi-stage">Multi-stage build</dt>
         <dd>A Dockerfile with several <code>FROM</code> lines. Early stages build; the final stage copies only the result, leaving compilers and source code behind.</dd>
+        <dt id="term-persistence-context">Persistence context</dt>
+        <dd>Hibernate's per-transaction memory: every entity it is tracking, keyed by id, plus a queue of SQL still to send. <code>persist</code> adds to it; flush empties the queue into the database.</dd>
         <dt id="term-port">Port and adapter</dt>
         <dd>A port is an interface the core of the application defines, such as <code>AccountRepository</code>. An adapter implements it with a specific technology, such as <code>JpaAccountRepository</code> with JPA.</dd>
         <dt id="term-posting">Posting</dt>
         <dd>An immutable ledger record that moves an amount between accounts. Every movement debits one account and credits another by the same amount. Introduced in Chapter 3.</dd>
         <dt id="term-problem-detail">Problem Detail</dt>
         <dd>The standard JSON error format from RFC 9457, with <code>type</code>, <code>title</code>, <code>status</code>, <code>detail</code> and <code>instance</code> fields, served as <code>application/problem+json</code>.</dd>
+        <dt id="term-proxy">Proxy</dt>
+        <dd>An object that stands in for another and adds behavior around its method calls. Spring's <code>AccountService$$SpringCGLIB$$0</code> is a generated subclass that wraps each call in a transaction.</dd>
         <dt id="term-read-model">Read model</dt>
         <dd>Data computed for display from authoritative records, rather than being authoritative itself.</dd>
+        <dt id="term-reflection">Reflection</dt>
+        <dd>Java's ability to inspect classes while the program runs: list their methods, read their annotations, call their constructors. It is how frameworks act on annotations they've never seen your code use.</dd>
         <dt id="term-testcontainers">Testcontainers</dt>
         <dd>A library that starts real dependencies, such as PostgreSQL, in throwaway Docker containers for the length of a test run.</dd>
+        <dt id="term-thread">Thread</dt>
+        <dd>One independent path of execution inside a process. Startup runs on <code>main</code>; Tomcat handles each request on one of its worker threads, named like <code>nio-8080-exec-5</code> in the logs.</dd>
         <dt id="term-transaction">Transaction</dt>
         <dd>A unit of database work that either fully commits or fully rolls back. Partial results are never visible.</dd>
       </dl>
