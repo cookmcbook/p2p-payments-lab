@@ -10,6 +10,6 @@ import org.springframework.web.bind.annotation.RestController;
 public class CapabilitiesController {
     @GetMapping("/capabilities")
     public Map<String, Object> capabilities() {
-        return Map.of("service", "p2p-payments-lab", "paymentProcessingEnabled", false, "chapter", 1);
+        return Map.of("service", "p2p-payments-lab", "paymentProcessingEnabled", false, "accountsEnabled", true, "chapter", 2);
     }
 }

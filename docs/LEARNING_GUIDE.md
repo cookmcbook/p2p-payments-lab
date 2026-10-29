@@ -16,4 +16,7 @@ The coding agent must update docs/ARCHITECTURE.md alongside any important code s
 
 ## Chapters
 
-[01 — Foundations and first runnable slice](chapters/01-foundations.md) is implemented as the starting point. See [the roadmap](ROADMAP.md) for future chapters. Do not treat roadmap entries as implemented functionality.
+- [01 — Foundations and first runnable slice](chapters/01-foundations.md)
+- [02 — Accounts, persistence, and a balance that cannot lie](chapters/02-accounts.md)
+
+See [the roadmap](ROADMAP.md) for future chapters. Do not treat roadmap entries as implemented functionality.
