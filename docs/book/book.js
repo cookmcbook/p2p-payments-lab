@@ -60,6 +60,15 @@
     };
     window.addEventListener("hashchange", show);
     show();
+    // <a href="#view" data-jump="heading-id">: open the view, then scroll to a heading inside it.
+    document.addEventListener("click", (e) => {
+      const a = e.target.closest("a[data-jump]");
+      if (!a) return;
+      e.preventDefault();
+      if (location.hash !== a.getAttribute("href")) { location.hash = a.getAttribute("href"); }
+      const target = document.getElementById(a.dataset.jump);
+      if (target) requestAnimationFrame(() => target.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth" }));
+    });
     const menu = $(".topbar button");
     if (menu) menu.addEventListener("click", () => {
       const open = $(".rail").classList.toggle("open");
@@ -185,7 +194,7 @@
     const spec = JSON.parse($("script[type='application/json']", box).textContent);
     const chipsBox = $(".chips", box);
     const reqBox = $(".request", box);
-    const log = $(".printout", box);
+    const log = $(".printout:not(.request)", box);
     const result = $(".result", box);
     const lanesBox = $(".lanes", box);
     const progress = $(".progress", box);
@@ -201,6 +210,17 @@
     });
     const packet = el("div", { class: "packet", "aria-hidden": "true" });
     lanesBox.append(packet);
+
+    // Optional per-step "deep" text: what is happening underneath the one-line note.
+    let deep = null;
+    if (spec.scenarios.some((sc) => sc.steps.some((st) => st.deep))) {
+      deep = el("div", { class: "deep", "aria-live": "polite" });
+      result.before(el("div", { class: "deep-box" }, el("span", { class: "label", text: "Under the hood" }), deep));
+    }
+    const showDeep = (text) => {
+      if (!deep) return;
+      deep.replaceChildren(...text.split("\n\n").map((para) => { const p = el("p"); p.innerHTML = para; return p; }));
+    };
 
     let scenario = spec.scenarios[0];
     let i = 0;
@@ -220,6 +240,7 @@
       result.innerHTML = "";
       reqBox.textContent = scenario.request;
       progress.textContent = `0 / ${scenario.steps.length}`;
+      showDeep("Press <b>Step</b> to go one step at a time. Each step explains what is happening underneath it.");
       stepBtn.disabled = false; playBtn.disabled = false;
       movePacket(scenario.steps[0].lane);
     };
@@ -238,6 +259,7 @@
       movePacket(s.lane);
       if (s.fail) packet.classList.add("fail");
       if (s.log) appendLog(s.log, s.fail ? "fail" : "");
+      showDeep(s.deep || s.text);
       i++;
       progress.textContent = `${i} / ${scenario.steps.length}`;
       if (i === scenario.steps.length) finish();
@@ -273,6 +295,18 @@
     window.addEventListener("resize", () => movePacket(scenario.steps[Math.max(0, i - 1)].lane));
     box.closest("[data-view]").addEventListener("viewshown", reset);
     reset();
+  }
+
+  /* ---------------- explorer: pick a layer or topic, see its panel ---------------- */
+  function initExplorer(box) {
+    const tabs = $$("[data-pane]", box);
+    const panes = $$(".pane[data-name]", box);
+    const show = (name) => {
+      tabs.forEach((t) => t.setAttribute("aria-pressed", String(t.dataset.pane === name)));
+      panes.forEach((p) => (p.hidden = p.dataset.name !== name));
+    };
+    tabs.forEach((t) => { t.type = "button"; t.addEventListener("click", () => show(t.dataset.pane)); });
+    if (tabs.length) show(tabs[0].dataset.pane);
   }
 
   /* ---------------- quizzes ---------------- */
@@ -550,6 +584,56 @@
     fresh(); render();
   }
 
+  /* ---------------- playground: Docker build cache ---------------- */
+  // Docker's rule: a step is reused (CACHED) only if its instruction, the files it copies, and every
+  // earlier step in the same stage are unchanged. The first miss forces every later step in that stage to run.
+  function initCache(box) {
+    const naive = $("#cache-naive", box);
+    const lists = $$("ol.build-steps", box);
+    const summary = $(".verdict", box);
+    let change = "src";
+    const run = () => {
+      const variant = naive.checked ? "naive" : "real";
+      lists.forEach((l) => (l.hidden = l.dataset.variant !== variant));
+      const list = lists.find((l) => l.dataset.variant === variant);
+      const missed = {};
+      let jarRebuilt = false;
+      const slow = [];
+      let ran = 0;
+      $$("li", list).forEach((li) => {
+        if ("meta" in li.dataset) {
+          // USER, EXPOSE and ENTRYPOINT only change image settings; BuildKit doesn't run them as steps.
+          li.className = "";
+          $(".pill", li).className = "pill pending";
+          $(".pill", li).textContent = "settings";
+          return;
+        }
+        const on = (li.dataset.on || "").split(" ").filter(Boolean);
+        const stage = li.dataset.stage;
+        const hit = !missed[stage] && !on.includes(change) && !(on.includes("jar") && jarRebuilt);
+        if (!hit) { missed[stage] = true; ran++; if (li.dataset.slow) slow.push(li.dataset.slow); }
+        if (li.dataset.out === "jar" && !hit) jarRebuilt = true;
+        li.className = hit ? "cached" : "rebuilt";
+        $(".pill", li).className = "pill " + (hit ? "ok" : "fail");
+        $(".pill", li).textContent = hit ? "cached" : "runs";
+      });
+      if (!ran) { summary.className = "verdict stored"; summary.textContent = "Every step is reused. The build finishes in seconds and produces an identical image."; return; }
+      // Re-downloading dependencies is the expensive outcome the Dockerfile's step order exists to avoid.
+      const downloads = slow.some((text) => text.includes("download"));
+      summary.className = "verdict " + (downloads ? "leak" : "stored");
+      summary.textContent = `${ran} step${ran === 1 ? "" : "s"} run again.` +
+        (slow.length ? ` Slow: ${slow.join("; ")}.` : " None of them is slow.") +
+        (downloads ? " Every dependency is downloaded again." : "");
+    };
+    $$(".chip", box).forEach((c) => c.addEventListener("click", () => {
+      change = c.dataset.change;
+      $$(".chip", box).forEach((x) => x.setAttribute("aria-pressed", String(x === c)));
+      run();
+    }));
+    naive.addEventListener("change", run);
+    run();
+  }
+
   /* ---------------- boot ---------------- */
   function boot() {
     initTheme();
@@ -563,6 +647,8 @@
     $$("[data-playground=sim]").forEach(initSim);
     $$("[data-playground=layers]").forEach(initLayers);
     $$("[data-playground=micros]").forEach(initMicros);
+    $$("[data-playground=cache]").forEach(initCache);
+    $$(".explorer").forEach(initExplorer);
     initRouter();
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();

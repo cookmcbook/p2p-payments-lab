@@ -21,6 +21,8 @@ curl -X POST http://localhost:8080/api/v1/accounts -H 'Content-Type: application
 curl http://localhost:8080/api/v1/accounts/<id>/balance
 ```
 
+To watch what Spring, Hibernate and the transaction proxy do inside each request, use the local-only debug overlay: `docker compose -f compose.yaml -f infra/compose.debug.yaml up --build`. It logs SQL parameters, including names, so never use it outside your own machine. The book's Under the hood section explains the output.
+
 ## Test
 
 ```bash
