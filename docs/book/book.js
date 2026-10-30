@@ -634,6 +634,134 @@
     run();
   }
 
+  /* ---------------- playground: two transactions racing for one balance ---------------- */
+  // Mirrors PostgreSQL READ COMMITTED: a read sees committed postings plus the transaction's own; an INSERT stays
+  // invisible to the other transaction until COMMIT. With the lock, a second FOR NO KEY UPDATE waits for COMMIT.
+  function initRace(box) {
+    const lock = $("#race-lock", box);
+    const log = $(".printout", box);
+    const verdict = $(".verdict", box);
+    const committedOut = $("[data-out=committed]", box);
+    const holderOut = $("[data-out=holder]", box);
+    const cols = $$(".tx", box).map((c) => ({ list: $(".tx-steps", c), seen: $(".seen", c), btn: $("button", c) }));
+    const START = 1000, SPEND = 1000;
+    const cents = (c) => (c < 0 ? "−" : "") + "$" + (Math.abs(c) / 100).toFixed(2);
+    const LABEL = {
+      begin: "BEGIN",
+      lock: "SELECT … FROM account WHERE id = A FOR NO KEY UPDATE",
+      read: "SELECT SUM(amount_minor) FROM posting WHERE account_id = A",
+      check: "balance − $10.00 ≥ 0 ?",
+      insert: "INSERT postings: A −1000, B +1000",
+      commit: "COMMIT",
+    };
+    let committed, holder, tx, timer;
+    const plan = () => (lock.checked ? ["begin", "lock", "read", "check", "insert", "commit"] : ["begin", "read", "check", "insert", "commit"]);
+    const over = (t) => t.state === "done" || t.state === "rolledback";
+
+    const say = (t, text, cls) => { log.append(el("span", cls ? { class: cls } : {}, `T${t.n}  ${text}\n`)); log.scrollTop = log.scrollHeight; };
+    const finish = (t, state) => {
+      t.state = state;
+      if (holder === t.n) {
+        holder = null;
+        // Releasing the lock wakes the waiting transaction: its SELECT ... FOR NO KEY UPDATE returns now.
+        const other = tx.find((o) => o.state === "waiting");
+        if (other) advance(other);
+      }
+    };
+    function advance(t) {
+      if (over(t)) return false;
+      const step = plan()[t.i];
+      if (step === "begin") say(t, "BEGIN");
+      else if (step === "lock") {
+        if (holder && holder !== t.n) {
+          if (t.state !== "waiting") { t.state = "waiting"; say(t, `${LABEL.lock}  … waits: T${holder} holds the lock`, "fail"); }
+          return false;
+        }
+        holder = t.n; t.state = "ready";
+        say(t, `${LABEL.lock}  → granted`);
+      } else if (step === "read") {
+        // READ COMMITTED: committed rows plus this transaction's own uncommitted ones.
+        t.seen = committed + t.pending;
+        say(t, `${LABEL.read}  → ${t.seen}`);
+      } else if (step === "check") {
+        if (t.seen - SPEND < 0) {
+          say(t, `${cents(t.seen)} is not enough → InsufficientFundsException → ROLLBACK, 409`, "fail");
+          t.i++; finish(t, "rolledback"); return true;
+        }
+        say(t, `${cents(t.seen)} − $10.00 = ${cents(t.seen - SPEND)} → allowed`);
+      } else if (step === "insert") {
+        t.pending = -SPEND;
+        say(t, `${LABEL.insert}  (visible only to T${t.n} until COMMIT)`);
+      } else if (step === "commit") {
+        committed += t.pending; t.pending = 0;
+        say(t, `COMMIT → everyone now sees A = ${cents(committed)}`, "ok");
+        t.i++; finish(t, "done"); return true;
+      }
+      t.i++;
+      return true;
+    }
+
+    function render() {
+      const steps = plan();
+      tx.forEach((t, k) => {
+        const c = cols[k];
+        c.list.replaceChildren(...steps.map((s, idx) => {
+          let cls = idx < t.i ? "done" : idx === t.i && !over(t) ? (t.state === "waiting" ? "waiting" : "next") : "";
+          if (t.state === "rolledback" && idx === t.i - 1) cls = "failed";
+          return el("li", { class: cls, text: LABEL[s] });
+        }));
+        c.seen.textContent = t.state === "waiting" ? "Waiting inside PostgreSQL for the lock…"
+          : t.state === "done" ? "Committed." : t.state === "rolledback" ? "Rolled back: nothing written."
+          : t.seen === null ? "Hasn't read the balance yet." : `Read the balance as ${cents(t.seen)}.`;
+        c.btn.disabled = over(t) || t.state === "waiting";
+      });
+      committedOut.textContent = cents(committed);
+      committedOut.parentElement.className = "readout " + (committed < 0 ? "bad" : "");
+      const pending = tx.filter((t) => t.pending).map((t) => `T${t.n} has an uncommitted −$10.00`);
+      holderOut.textContent = [holder ? `Row A locked by T${holder}.` : lock.checked ? "Row A is not locked." : "No locks taken.", ...pending].join(" ");
+      verdict.hidden = !tx.every(over);
+      if (tx.every(over)) {
+        const wins = tx.filter((t) => t.state === "done").length;
+        if (committed < 0) {
+          verdict.className = "verdict leak";
+          verdict.textContent = `Overdrawn: A is ${cents(committed)}. Both transactions read $10.00 before either committed, so both checks passed. No database rule fired: each entry balanced on its own.`;
+        } else {
+          verdict.className = "verdict stored";
+          verdict.textContent = `Correct: A is ${cents(committed)}. ${wins} transfer succeeded and the other was refused.` +
+            (lock.checked ? " The lock made the second transaction read the balance only after the first committed." : " This order was safe only because T1 finished before T2 read anything. Try “take turns”.");
+        }
+      }
+    }
+    const reset = () => {
+      clearInterval(timer); timer = null;
+      committed = START; holder = null;
+      tx = [1, 2].map((n) => ({ n, i: 0, seen: null, pending: 0, state: "ready" }));
+      log.replaceChildren();
+      $$("[data-order]", box).forEach((b) => b.setAttribute("aria-pressed", "false"));
+      render();
+    };
+    const play = (order, chip) => {
+      reset();
+      chip.setAttribute("aria-pressed", "true");
+      let turn = 0;
+      const tick = () => {
+        if (tx.every(over)) { clearInterval(timer); timer = null; return; }
+        const preferred = order === "serial" ? tx.find((t) => !over(t)) : tx[turn % 2];
+        const other = tx.find((t) => t !== preferred && !over(t));
+        if (!advance(preferred) && other) advance(other);
+        turn++;
+        render();
+      };
+      tick();
+      timer = setInterval(tick, reducedMotion() ? 1300 : 900);
+    };
+    cols.forEach((c, k) => c.btn.addEventListener("click", () => { clearInterval(timer); timer = null; advance(tx[k]); render(); }));
+    $$("[data-order]", box).forEach((b) => b.addEventListener("click", () => play(b.dataset.order, b)));
+    $("[data-reset]", box).addEventListener("click", reset);
+    lock.addEventListener("change", reset);
+    reset();
+  }
+
   /* ---------------- boot ---------------- */
   function boot() {
     initTheme();
@@ -648,6 +776,7 @@
     $$("[data-playground=layers]").forEach(initLayers);
     $$("[data-playground=micros]").forEach(initMicros);
     $$("[data-playground=cache]").forEach(initCache);
+    $$("[data-playground=race]").forEach(initRace);
     $$(".explorer").forEach(initExplorer);
     initRouter();
   }
