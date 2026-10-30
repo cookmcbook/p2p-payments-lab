@@ -37,4 +37,9 @@ A milestone is done only when the code compiles, appropriate tests pass, documen
 
 ## Suggested next task
 
-Chapter 2: Implement account creation and read-only balance views with PostgreSQL persistence and Flyway migration; add Testcontainers integration tests. Do **not** implement transfers until Chapter 3 has specified double-entry ledger invariants.
+Chapter 4: payment API (`POST /api/v1/payments`) built on `LedgerService`. Cover:
+- explicit lifecycle states (accepted, processing, completed, rejected, indeterminate);
+- holds, so the available balance differs from the ledger balance;
+- idempotency keys scoped to the payer and a request fingerprint, with a retention policy.
+
+Replace the lab transfer endpoint. Keep the Chapter 3 invariants and concurrency tests green.

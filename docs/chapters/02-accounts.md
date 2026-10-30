@@ -1,5 +1,7 @@
 # Chapter 2 — Accounts, persistence, and a balance that cannot lie
 
+> **Reading this after Chapter 3?** This chapter describes the code as it was at Chapter 2: `AccountService.balance` returned zero. [Chapter 3](03-ledger.md) replaced it with a sum over ledger postings.
+
 ## Learning objectives
 
 By the end of this chapter you can:

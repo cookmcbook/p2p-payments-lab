@@ -38,8 +38,8 @@ class AccountPersistenceIntegrationTest {
     @Test
     void flywayAppliedAccountMigration() {
         Integer applied = jdbc.queryForObject(
-            "SELECT count(*) FROM flyway_schema_history WHERE version = '2' AND success", Integer.class);
-        assertThat(applied).isEqualTo(1);
+            "SELECT count(*) FROM flyway_schema_history WHERE version IN ('2', '3') AND success", Integer.class);
+        assertThat(applied).isEqualTo(2);
     }
 
     @Test
@@ -60,6 +60,13 @@ class AccountPersistenceIntegrationTest {
 
         Integer rows = jdbc.queryForObject("SELECT count(*) FROM account WHERE id = ?", Integer.class, id);
         assertThat(rows).isEqualTo(1);
+    }
+
+    @Test
+    void labLedgerEndpointsDoNotExistWithoutTheLabProfile() {
+        ResponseEntity<String> response = http.postForEntity("/lab/ledger/funding",
+            Map.of("accountId", UUID.randomUUID(), "amountMinor", 100, "currency", "USD"), String.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     @Test
