@@ -211,15 +211,33 @@
     const packet = el("div", { class: "packet", "aria-hidden": "true" });
     lanesBox.append(packet);
 
-    // Optional per-step "deep" text: what is happening underneath the one-line note.
+    // Optional per-step explanation. Beginner layers first ("what": plain words, "why": why it matters), then
+    // "deep" (what is happening underneath) in a fold-out that stays open across steps once the reader opens it.
+    // Tracers without "what" show "deep" directly, as before.
     let deep = null;
-    if (spec.scenarios.some((sc) => sc.steps.some((st) => st.deep))) {
+    let howOpen = false;
+    const layered = spec.scenarios.some((sc) => sc.steps.some((st) => st.what));
+    if (layered || spec.scenarios.some((sc) => sc.steps.some((st) => st.deep))) {
       deep = el("div", { class: "deep", "aria-live": "polite" });
-      result.before(el("div", { class: "deep-box" }, el("span", { class: "label", text: "Under the hood" }), deep));
+      result.before(layered ? el("div", { class: "deep-box" }, deep)
+        : el("div", { class: "deep-box" }, el("span", { class: "label", text: "Under the hood" }), deep));
     }
+    const paras = (text) => text.split("\n\n").map((para) => { const p = el("p"); p.innerHTML = para; return p; });
     const showDeep = (text) => {
+      if (deep) deep.replaceChildren(...paras(text));
+    };
+    const showStep = (s) => {
       if (!deep) return;
-      deep.replaceChildren(...text.split("\n\n").map((para) => { const p = el("p"); p.innerHTML = para; return p; }));
+      if (!s.what) { showDeep(s.deep || s.text); return; }
+      const layer = (name, text) => el("div", { class: "layer" }, el("span", { class: "layer-name", text: name }), ...paras(text));
+      const parts = [layer("What’s happening", s.what), layer("Why it matters", s.why)];
+      if (s.deep) {
+        const how = el("details", { class: "how" }, el("summary", { text: "How it works underneath" }), ...paras(s.deep));
+        how.open = howOpen;
+        how.addEventListener("toggle", () => { howOpen = how.open; });
+        parts.push(how);
+      }
+      deep.replaceChildren(...parts);
     };
 
     let scenario = spec.scenarios[0];
@@ -240,7 +258,9 @@
       result.innerHTML = "";
       reqBox.textContent = scenario.request;
       progress.textContent = `0 / ${scenario.steps.length}`;
-      showDeep("Press <b>Step</b> to go one step at a time. Each step explains what is happening underneath it.");
+      showDeep(layered
+        ? "Press <b>Step</b> to go one step at a time. Each step says what is happening in plain words and why it matters. Open <b>How it works underneath</b> for the full detail."
+        : "Press <b>Step</b> to go one step at a time. Each step explains what is happening underneath it.");
       stepBtn.disabled = false; playBtn.disabled = false;
       movePacket(scenario.steps[0].lane);
     };
@@ -259,7 +279,7 @@
       movePacket(s.lane);
       if (s.fail) packet.classList.add("fail");
       if (s.log) appendLog(s.log, s.fail ? "fail" : "");
-      showDeep(s.deep || s.text);
+      showStep(s);
       i++;
       progress.textContent = `${i} / ${scenario.steps.length}`;
       if (i === scenario.steps.length) finish();
@@ -654,11 +674,16 @@
       insert: "INSERT postings: A −1000, B +1000",
       commit: "COMMIT",
     };
+    const explainOut = $("[data-out=explain]", box);
     let committed, holder, tx, timer;
+    let notes = [];
     const plan = () => (lock.checked ? ["begin", "lock", "read", "check", "insert", "commit"] : ["begin", "read", "check", "insert", "commit"]);
     const over = (t) => t.state === "done" || t.state === "rolledback";
 
     const say = (t, text, cls) => { log.append(el("span", cls ? { class: cls } : {}, `T${t.n}  ${text}\n`)); log.scrollTop = log.scrollHeight; };
+    // Plain-language narration of the last move, shown above the SQL log.
+    const explain = (text) => notes.push(text);
+    const otherOf = (t) => tx.find((o) => o !== t);
     const finish = (t, state) => {
       t.state = state;
       if (holder === t.n) {
@@ -671,30 +696,51 @@
     function advance(t) {
       if (over(t)) return false;
       const step = plan()[t.i];
-      if (step === "begin") say(t, "BEGIN");
-      else if (step === "lock") {
+      const o = otherOf(t);
+      if (step === "begin") {
+        say(t, "BEGIN");
+        explain(`T${t.n} begins a transaction. Nothing has been read or written yet.`);
+      } else if (step === "lock") {
         if (holder && holder !== t.n) {
-          if (t.state !== "waiting") { t.state = "waiting"; say(t, `${LABEL.lock}  … waits: T${holder} holds the lock`, "fail"); }
+          if (t.state !== "waiting") {
+            t.state = "waiting"; say(t, `${LABEL.lock}  … waits: T${holder} holds the lock`, "fail");
+            explain(`T${t.n} asks to lock account A, but T${holder} already holds that lock. T${t.n} has to wait until T${holder} commits or rolls back, and it can't read the balance until then.`);
+          }
           return false;
         }
+        const waited = t.state === "waiting";
         holder = t.n; t.state = "ready";
         say(t, `${LABEL.lock}  → granted`);
+        explain(waited
+          ? `The lock is free again, so T${t.n} gets it and stops waiting. Its next step reads the balance, and that read will include anything committed while it waited.`
+          : `T${t.n} locks account A. Until T${t.n} finishes, any other transaction that asks for this lock has to wait.`);
       } else if (step === "read") {
         // READ COMMITTED: committed rows plus this transaction's own uncommitted ones.
         t.seen = committed + t.pending;
         say(t, `${LABEL.read}  → ${t.seen}`);
+        explain(`T${t.n} reads A's balance: ${cents(t.seen)}.` + (o.pending
+          ? ` T${o.n} has already written a −$10.00 debit, but hasn't committed it, so T${t.n} can't see it.`
+          : committed < START ? " That includes the debit that was already committed." : ""));
       } else if (step === "check") {
         if (t.seen - SPEND < 0) {
           say(t, `${cents(t.seen)} is not enough → InsufficientFundsException → ROLLBACK, 409`, "fail");
+          explain(`${cents(t.seen)} isn't enough to send $10.00, so T${t.n} refuses. It throws InsufficientFundsException, the transaction rolls back, and the user gets 409. Nothing was written.`);
           t.i++; finish(t, "rolledback"); return true;
         }
         say(t, `${cents(t.seen)} − $10.00 = ${cents(t.seen - SPEND)} → allowed`);
+        explain(`T${t.n} decides ${cents(t.seen)} is enough.` + (lock.checked
+          ? ` It holds the lock, so nobody else can spend A's money before it writes.`
+          : ` But nothing stops another transaction spending the same money before T${t.n} writes, so this decision may already be out of date.`));
       } else if (step === "insert") {
         t.pending = -SPEND;
         say(t, `${LABEL.insert}  (visible only to T${t.n} until COMMIT)`);
+        explain(`T${t.n} writes its postings: A −$10.00 and B +$10.00. Until T${t.n} commits, only T${t.n} can see them.`);
       } else if (step === "commit") {
         committed += t.pending; t.pending = 0;
         say(t, `COMMIT → everyone now sees A = ${cents(committed)}`, "ok");
+        explain(`T${t.n} commits. Its debit is now saved and visible to everyone: A is ${cents(committed)}.` +
+          (holder === t.n ? " Its lock on A is released." : "") +
+          (committed < 0 ? " A is negative: the same $10.00 was spent twice." : ""));
         t.i++; finish(t, "done"); return true;
       }
       t.i++;
@@ -715,6 +761,10 @@
           : t.seen === null ? "Hasn't read the balance yet." : `Read the balance as ${cents(t.seen)}.`;
         c.btn.disabled = over(t) || t.state === "waiting";
       });
+      if (notes.length) {
+        explainOut.replaceChildren(...notes.map((text) => el("p", { text })));
+        notes = [];
+      }
       committedOut.textContent = cents(committed);
       committedOut.parentElement.className = "readout " + (committed < 0 ? "bad" : "");
       const pending = tx.filter((t) => t.pending).map((t) => `T${t.n} has an uncommitted −$10.00`);
@@ -737,6 +787,7 @@
       committed = START; holder = null;
       tx = [1, 2].map((n) => ({ n, i: 0, seen: null, pending: 0, state: "ready" }));
       log.replaceChildren();
+      notes = ["Press Step T1 or Step T2 to move one transaction forward, or press a Play button. Each move is explained here in plain words."];
       $$("[data-order]", box).forEach((b) => b.setAttribute("aria-pressed", "false"));
       render();
     };
