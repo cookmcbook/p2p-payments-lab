@@ -2,6 +2,7 @@ package dev.p2plab.payments.account.application;
 
 import dev.p2plab.payments.account.domain.Account;
 import dev.p2plab.payments.account.domain.AccountRepository;
+import dev.p2plab.payments.ledger.application.LedgerService;
 import dev.p2plab.payments.money.Currency;
 import dev.p2plab.payments.money.Money;
 import java.time.Clock;
@@ -17,10 +18,12 @@ public class AccountService {
     private static final Logger log = LoggerFactory.getLogger(AccountService.class);
 
     private final AccountRepository accounts;
+    private final LedgerService ledger;
     private final Clock clock;
 
-    public AccountService(AccountRepository accounts, Clock clock) {
+    public AccountService(AccountRepository accounts, LedgerService ledger, Clock clock) {
         this.accounts = accounts;
+        this.ledger = ledger;
         this.clock = clock;
     }
 
@@ -41,9 +44,9 @@ public class AccountService {
     @Transactional(readOnly = true)
     public AccountBalance balance(UUID id) {
         Account account = get(id);
-        // No ledger exists yet, so no funds can exist: every account is zero. Chapter 3 replaces this
-        // with a sum over immutable journal postings.
-        Money zero = Money.zero(account.currency());
-        return new AccountBalance(account.id(), zero, zero);
+        // Derived from postings, never stored (ADR 0002). Nothing is held yet, so available equals ledger;
+        // holds for in-flight payments arrive in Chapter 4.
+        Money ledgerBalance = ledger.balance(account.id(), account.currency());
+        return new AccountBalance(account.id(), ledgerBalance, ledgerBalance);
     }
 }

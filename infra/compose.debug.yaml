@@ -17,4 +17,4 @@ services:
         "org.hibernate.engine.transaction.internal.TransactionImpl":"DEBUG",
         "org.hibernate.SQL":"DEBUG",
         "org.hibernate.orm.jdbc.bind":"TRACE"}}}
-      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info,beans,mappings,conditions
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info,beans,mappings,conditions,metrics

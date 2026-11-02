@@ -29,7 +29,7 @@ Read alongside Chapters 1 and 2. The interactive version (`docs/book/index.html#
 | Compose network | Private network with DNS by service name | `getent hosts postgres` → `172.18.0.2 postgres` |
 | payment-api container | Isolated Linux process from the image; Ubuntu userland | `id` → `uid=999(app)`; PID 1 is `java -jar /app/app.jar` |
 | Fat JAR | Zip of our classes plus every library | 230 entries, 17 of our classes, 68 library JARs; `Main-Class: org.springframework.boot.loader.launch.JarLauncher`, `Start-Class: dev.p2plab.payments.PaymentApiApplication`; migrations at `BOOT-INF/classes/db/migration/` |
-| Spring container | Registry of beans | 372 beans, 8 from our code; 219 auto-configuration conditions matched, 296 did not (e.g. `KafkaAutoConfiguration: did not find required class 'org.springframework.kafka.core.KafkaTemplate'`) |
+| Spring container | Registry of beans | 372 beans, 8 from our code at Chapter 2; 378 and 11 at Chapter 3 with the lab profile; 219 auto-configuration conditions matched, 296 did not (e.g. `KafkaAutoConfiguration: did not find required class 'org.springframework.kafka.core.KafkaTemplate'`) |
 | Tomcat | Web server library; one worker thread per request | Every line of a request is tagged `[nio-8080-exec-N]` |
 | HikariCP | Connection pool, default size 10 | `pg_stat_activity`: 10 idle `PostgreSQL JDBC Driver` connections |
 | postgres container | PostgreSQL 16.15 | `\d account` shows `account_currency_check`, `account_display_name_check` |
@@ -83,6 +83,15 @@ The INSERT appears **after** `committing`: `persist` only queued it; Hibernate f
 
 **Self-invocation:** `balance()` calls `get(id)`, which is `this.get(id)` on the real object. The log contains one `Creating new transaction … balance` and no line for `get`. A `@Transactional` method called from inside its own class is not intercepted.
 
+Since Chapter 3, `balance()` also calls `ledger.balance(...)`, which is a call on *another bean's* proxy. That call is intercepted and joins the open transaction. Re-recorded:
+
+```
+JpaTransactionManager : Found thread-bound EntityManager [SessionImpl(1255679877<open>)] for JPA transaction
+JpaTransactionManager : Participating in existing transaction
+TransactionInterceptor : Getting transaction for [dev.p2plab.payments.ledger.application.LedgerService.balance]
+SQL : SELECT COALESCE(SUM(amount_minor), 0) FROM posting WHERE account_id = ?
+```
+
 **Privacy:** with `org.hibernate.orm.jdbc.bind=TRACE`, the log printed `binding parameter (3:VARCHAR) <- [Alice Example]`. The service never logs names, but debug logging did. That is why the overlay is local-only.
 
 ## Who sends the SQL
@@ -97,6 +106,23 @@ The INSERT appears **after** `committing`: `persist` only queued it; Hibernate f
 | PostgreSQL driver | Speaks the wire protocol on port 5432 | `postgresql-42.7.5` |
 
 `Found 0 JPA repository interfaces` in the startup log is Spring Data finding no `JpaRepository` interfaces: the repository is hand-written on purpose ([Chapter 2](02-accounts.md)).
+
+## PostgreSQL: snapshots and row locks (Chapter 3)
+
+**MVCC.** PostgreSQL keeps row versions tagged with the transaction that wrote them. Each statement reads a *snapshot*: the set of transactions committed when it started. Uncommitted rows are invisible to others, and readers never wait for writers. Under READ COMMITTED (the default) the snapshot is retaken for **every statement**, so a read that runs after a lock is granted sees whatever committed while you waited.
+
+**Row locks** are written into the row header as "locked by transaction X". A conflicting request waits for X to end.
+
+| Requested ↓ / Held → | `FOR UPDATE` | `FOR NO KEY UPDATE` | `FOR SHARE` | `FOR KEY SHARE` |
+| --- | --- | --- | --- | --- |
+| `FOR UPDATE` | waits | waits | waits | waits |
+| `FOR NO KEY UPDATE` (our debit lock) | waits | waits | waits | ok |
+| `FOR SHARE` | waits | waits | ok | ok |
+| `FOR KEY SHARE` (every foreign key check) | waits | ok | ok | ok |
+
+Two debits of one account conflict, which gives the queue we want. A credit's foreign key check doesn't conflict with a debit lock. With `FOR UPDATE` it would, and opposite-direction transfers deadlock, as reproduced in [Chapter 3](03-ledger.md).
+
+Waiting sessions show `wait_event_type = 'Lock'`, `wait_event = 'transactionid'` in `pg_stat_activity`, and `pg_blocking_pids(pid)` names the blocker. A wait cycle is broken after `deadlock_timeout` (1 s) with SQLSTATE `40P01`.
 
 ## Docker layers and the build cache
 
@@ -141,7 +167,7 @@ docker compose down && docker compose up -d   # back to normal logging
 1. Remove `@Configuration` from `TimeConfig` and start. **Expect:** the missing-`Clock` error; Flyway already ran.
 2. Add a second `@Repository` implementation. **Expect:** "required a single bean, but 2 were found".
 3. With the overlay, create an account. **Expect:** `insert into account` after `account opened` and after `committing`.
-4. With the overlay, read a balance. **Expect:** one `Creating new transaction` line.
+4. With the overlay, read a balance. **Expect:** one `Creating new transaction` line, and (since Chapter 3) one `Participating in existing transaction` for `LedgerService.balance`.
 5. Stop `postgres`, restart `payment-api`. **Expect:** bottom cause `UnknownHostException: postgres`.
 6. `docker compose down`, then `up`: accounts remain. `down -v`: they are gone.
 

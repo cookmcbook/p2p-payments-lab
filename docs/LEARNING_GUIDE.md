@@ -18,6 +18,7 @@ The coding agent must update docs/ARCHITECTURE.md alongside any important code s
 
 - [01 — Foundations and first runnable slice](chapters/01-foundations.md)
 - [02 — Accounts, persistence, and a balance that cannot lie](chapters/02-accounts.md)
-- [Companion — Under the hood: Spring, JPA/Hibernate and Docker](chapters/companion-under-the-hood.md) (read alongside 01–02; interactive at `book/index.html#hood`)
+- [Companion — Under the hood: Spring, JPA/Hibernate, PostgreSQL locks and Docker](chapters/companion-under-the-hood.md) (read alongside 01–03; interactive at `book/index.html#hood`)
+- [03 — A ledger that can't lose a cent, even under a crowd](chapters/03-ledger.md) (double entry, atomicity, race conditions, row locks, load)
 
 See [the roadmap](ROADMAP.md) for future chapters. Do not treat roadmap entries as implemented functionality.

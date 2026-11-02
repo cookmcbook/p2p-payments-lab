@@ -1,8 +1,8 @@
 // Verifies the interactive textbook against the repository so it cannot silently go stale.
 //   node docs/book/tools/check-snippets.mjs
 // Checks: code excerpts match their data-source file (contiguous lines, indentation-insensitive);
-// tour anchors exist in their excerpt; glossary links resolve; tracer JSON is valid; in-book jumps and
-// explorer panes resolve; quiz answers exist.
+// tour anchors exist in their excerpt; glossary links resolve; tracer JSON is valid and beginner layers are
+// complete; in-book jumps and explorer panes resolve; quiz answers exist.
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,12 +49,17 @@ for (const [, json] of html.matchAll(/<script type="application\/json">([\s\S]*?
   tracers++;
   let spec;
   try { spec = JSON.parse(json); } catch (e) { errors.push(`tracer #${tracers}: invalid JSON (${e.message})`); continue; }
+  // A tracer that uses the beginner layers ("what", "why") on any step must use them on every step.
+  const layered = spec.scenarios.some((sc) => sc.steps.some((st) => st.what !== undefined));
   for (const sc of spec.scenarios) {
     if (!sc.steps.length) errors.push(`tracer #${tracers} "${sc.label}": no steps`);
-    for (const st of sc.steps) {
+    sc.steps.forEach((st, k) => {
       if (!(st.lane >= 0 && st.lane < spec.lanes.length)) errors.push(`tracer #${tracers} "${sc.label}": lane ${st.lane} out of range`);
       if (st.deep !== undefined && typeof st.deep !== "string") errors.push(`tracer #${tracers} "${sc.label}": "deep" must be a string`);
-    }
+      if (layered && !(typeof st.what === "string" && st.what && typeof st.why === "string" && st.why)) {
+        errors.push(`tracer #${tracers} "${sc.label}" step ${k + 1}: needs non-empty "what" and "why", like the other steps`);
+      }
+    });
     if (!sc.result || typeof sc.result.ok !== "boolean") errors.push(`tracer #${tracers} "${sc.label}": missing result`);
   }
 }

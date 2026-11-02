@@ -1,0 +1,13 @@
+# Local learning overlay: turns on the lab-only ledger endpoints used by Chapter 3's experiments.
+#   docker compose -f compose.yaml -f infra/compose.lab.yaml up --build
+#   node infra/lab/race.mjs
+# Add -f infra/compose.debug.yaml as well to watch the SQL and row locks (slower, and it logs names).
+#
+# The lab profile exposes POST /lab/ledger/funding and /lab/ledger/transfers with NO authentication and NO
+# idempotency (ADR 0005). Anyone who can reach port 8080 can move the simulated money. Never deploy it.
+# It also exposes /actuator/metrics, which race.mjs samples to show HikariCP connections in use and waiting.
+services:
+  payment-api:
+    environment:
+      SPRING_PROFILES_ACTIVE: lab
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info,metrics
