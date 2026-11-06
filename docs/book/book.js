@@ -706,8 +706,13 @@
     };
     const ex = explainer($("[data-out=explain]", box));
     const line = narration(box);
+    const timeline = $("[data-out=timeline]", box);
     let committed, holder, tx, timer;
     let notes = [];
+    // Timeline: one column per moment (one button press or Play tick). `events` are cells; `balances[c]` is A's
+    // committed balance at the end of moment c. A commit and the wake-up it causes share a moment.
+    let clock, events, balances;
+    const mark = (t, text, cls, sub = "") => { const e = { at: clock, n: t.n, text, sub, cls }; events.push(e); return e; };
     const plan = () => (lock.checked ? ["begin", "lock", "read", "check", "insert", "commit"] : ["begin", "read", "check", "insert", "commit"]);
     const over = (t) => t.state === "done" || t.state === "rolledback";
 
@@ -734,41 +739,52 @@
       // Each narrate() call names its key literally, so check-snippets.mjs can find it.
       if (step === "begin") {
         say(t, "BEGIN");
+        mark(t, "BEGIN", "");
         narrate(t, "begin");
       } else if (step === "lock") {
         if (holder && holder !== t.n) {
           if (t.state !== "waiting") {
-            t.state = "waiting"; say(t, `${LABEL.lock}  … waits: T${holder} holds the lock`, "fail");
+            t.state = "waiting"; t.waitFrom = clock; say(t, `${LABEL.lock}  … waits: T${holder} holds the lock`, "fail");
+            mark(t, "LOCK?", "wait", "waits");
             narrate(t, "lock-waits");
           }
           return false;
         }
         const waited = t.state === "waiting";
+        if (waited) t.waits.push([t.waitFrom, clock]);
         holder = t.n; t.state = "ready";
         say(t, `${LABEL.lock}  → granted`);
+        mark(t, "LOCK", "lock", waited ? "granted" : "");
         if (waited) narrate(t, "lock-granted-after-wait"); else narrate(t, "lock-granted");
       } else if (step === "read") {
         // READ COMMITTED: committed rows plus this transaction's own uncommitted ones.
         t.seen = committed + t.pending;
         say(t, `${LABEL.read}  → ${t.seen}`);
+        t.readEvent = mark(t, "READ", "read", cents(t.seen));
         if (o.pending) narrate(t, "read-hidden");
         else if (committed < START) narrate(t, "read-after-commit");
         else narrate(t, "read");
       } else if (step === "check") {
         if (t.seen - SPEND < 0) {
           say(t, `${cents(t.seen)} is not enough → InsufficientFundsException → ROLLBACK, 409`, "fail");
+          mark(t, "REFUSE", "refuse", "409");
           narrate(t, "check-refuse");
           t.i++; finish(t, "rolledback"); return true;
         }
         say(t, `${cents(t.seen)} − $10.00 = ${cents(t.seen - SPEND)} → allowed`);
+        mark(t, "CHECK", "", "ok");
         if (lock.checked) narrate(t, "check-pass-locked"); else narrate(t, "check-pass-unlocked");
       } else if (step === "insert") {
         t.pending = -SPEND;
         say(t, `${LABEL.insert}  (visible only to T${t.n} until COMMIT)`);
+        mark(t, "INSERT", "", "−$10.00");
         narrate(t, "insert");
       } else if (step === "commit") {
         committed += t.pending; t.pending = 0;
         say(t, `COMMIT → everyone now sees A = ${cents(committed)}`, "ok");
+        mark(t, "COMMIT", committed < 0 ? "bad" : "ok");
+        // The other transaction read the balance and is still running: what it read is now out of date.
+        if (o.readEvent && !over(o)) { o.readEvent.cls = "stale"; o.readEvent.title = `Out of date: T${t.n} committed after this read`; }
         // A lock and an overdraft can't both happen: the lock is what prevents it.
         if (committed < 0) narrate(t, "commit-overdrawn");
         else if (holder === t.n) narrate(t, "commit-release");
@@ -779,7 +795,35 @@
       return true;
     }
 
+    function renderTimeline() {
+      if (!timeline) return;
+      if (!clock) {
+        timeline.replaceChildren(el("caption", { text: "Moves appear here, one column per moment." }));
+        return;
+      }
+      const moments = Array.from({ length: clock }, (_, k) => k + 1);
+      const head = el("tr", {}, el("th", { scope: "col", text: "Moment" }), ...moments.map((c) => el("th", { scope: "col", text: String(c) })));
+      const rows = tx.map((t) => el("tr", {}, el("th", { scope: "row", text: `T${t.n}` }), ...moments.map((c) => {
+        const e = events.find((x) => x.at === c && x.n === t.n);
+        if (e) return el("td", { class: "ev " + e.cls, ...(e.title ? { title: e.title } : {}) }, e.text,
+          ...(e.sub ? [el("small", { text: e.sub })] : []), ...(e.title ? [el("small", { text: "out of date" })] : []));
+        const waiting = t.waits.some(([from, to]) => c > from && c < to) || (t.state === "waiting" && c > t.waitFrom);
+        return el("td", waiting ? { class: "waiting", text: "waits" } : {});
+      })));
+      let prev = START;
+      const bal = el("tr", { class: "balance" }, el("th", { scope: "row", text: "A, committed" }), ...moments.map((c) => {
+        const b = balances[c];
+        const cls = (b !== prev ? "changed " : "") + (b < 0 ? "bad" : "");
+        prev = b;
+        return el("td", { class: cls.trim(), text: cents(b) });
+      }));
+      timeline.replaceChildren(el("thead", {}, head), el("tbody", {}, ...rows, bal));
+      const wrap = timeline.parentElement;
+      wrap.scrollLeft = wrap.scrollWidth;
+    }
+
     function render() {
+      renderTimeline();
       const steps = plan();
       tx.forEach((t, k) => {
         const c = cols[k];
@@ -806,7 +850,7 @@
         const wins = tx.filter((t) => t.state === "done").length;
         if (committed < 0) {
           verdict.className = "verdict leak";
-          verdict.textContent = `Overdrawn: A is ${cents(committed)}. Both transactions read $10.00 before either committed, so both checks passed. No database rule fired: each entry balanced on its own.`;
+          verdict.textContent = `Overdrawn: A is ${cents(committed)}. Both transactions read $10.00 before either committed, so both checks passed: in the timeline, both READ cells sit left of the first COMMIT. No database rule fired: each entry balanced on its own.`;
         } else {
           verdict.className = "verdict stored";
           verdict.textContent = `Correct: A is ${cents(committed)}. ${wins} transfer succeeded and the other was refused.` +
@@ -817,12 +861,15 @@
     const reset = () => {
       clearInterval(timer); timer = null;
       committed = START; holder = null;
-      tx = [1, 2].map((n) => ({ n, i: 0, seen: null, pending: 0, state: "ready" }));
+      clock = 0; events = []; balances = [];
+      tx = [1, 2].map((n) => ({ n, i: 0, seen: null, pending: 0, state: "ready", waits: [], waitFrom: null, readEvent: null }));
       log.replaceChildren();
       notes = ["Press <b>Step T1</b> or <b>Step T2</b> to move one transaction forward, or press a Play button. Each move says what is happening in plain words and why it matters. Open <b>How it works underneath</b> to see what PostgreSQL is doing."];
       $$("[data-order]", box).forEach((b) => b.setAttribute("aria-pressed", "false"));
       render();
     };
+    // One moment: a button press or a Play tick. Everything it causes lands in the same timeline column.
+    const moment = (fn) => { clock++; fn(); balances[clock] = committed; render(); };
     const play = (order, chip) => {
       reset();
       chip.setAttribute("aria-pressed", "true");
@@ -831,14 +878,13 @@
         if (tx.every(over)) { clearInterval(timer); timer = null; return; }
         const preferred = order === "serial" ? tx.find((t) => !over(t)) : tx[turn % 2];
         const other = tx.find((t) => t !== preferred && !over(t));
-        if (!advance(preferred) && other) advance(other);
+        moment(() => { if (!advance(preferred) && other) advance(other); });
         turn++;
-        render();
       };
       tick();
       timer = setInterval(tick, reducedMotion() ? 1300 : 900);
     };
-    cols.forEach((c, k) => c.btn.addEventListener("click", () => { clearInterval(timer); timer = null; advance(tx[k]); render(); }));
+    cols.forEach((c, k) => c.btn.addEventListener("click", () => { clearInterval(timer); timer = null; moment(() => advance(tx[k])); }));
     $$("[data-order]", box).forEach((b) => b.addEventListener("click", () => play(b.dataset.order, b)));
     $("[data-reset]", box).addEventListener("click", reset);
     lock.addEventListener("change", reset);

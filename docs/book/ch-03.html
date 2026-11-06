@@ -364,6 +364,9 @@ p2p_lab=# DELETE FROM posting;
           <div class="race-db"><span class="label">PostgreSQL</span><div class="readout"><span class="label">A's committed balance</span><div class="big" data-out="committed"></div><p data-out="holder"></p></div></div>
           <div class="tx" data-tx="2"><span class="label">Transaction T2</span><ol class="tx-steps"></ol><p class="seen"></p><button class="btn" type="button">Step T2</button></div>
         </div>
+        <span class="label">Timeline: time runs left to right, one column per press</span>
+        <div class="timeline-wrap"><table class="timeline" data-out="timeline" aria-live="polite"></table></div>
+        <p class="timeline-key"><span class="key stale">red READ</span> the balance changed before that transaction finished · <span class="key waiting">stripes</span> waiting for the lock · cells in one column happen at the same moment</p>
         <div class="deep-box race-explain"><span class="label">What just happened</span><div class="deep" data-out="explain" aria-live="polite"></div></div>
         <span class="label">What each transaction sends, in order</span>
         <pre class="printout" aria-live="polite"></pre>
