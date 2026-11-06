@@ -187,6 +187,49 @@
     go(0);
   }
 
+  /* ---------------- explanations in layers (ADR 0007), shared by tracers and playgrounds ---------------- */
+  // A step is { what, why, deep }: plain words first, why it matters second, then what happens underneath in a
+  // fold-out that stays open across steps once the reader opens it. A step without "what" shows its "deep" (or
+  // "text") directly, for tracers written before the beginner layers.
+  const paras = (text) => text.split("\n\n").map((para) => { const p = el("p"); p.innerHTML = para; return p; });
+  function explainer(container) {
+    let howOpen = false;
+    const layer = (name, text) => el("div", { class: "layer" }, el("span", { class: "layer-name", text: name }), ...paras(text));
+    const block = (s) => {
+      if (!s.what) return paras(s.deep || s.text || "");
+      const parts = [layer("What’s happening", s.what), layer("Why it matters", s.why)];
+      if (s.deep) {
+        const how = el("details", { class: "how" }, el("summary", { text: "How it works underneath" }), ...paras(s.deep));
+        how.open = howOpen;
+        how.addEventListener("toggle", () => {
+          howOpen = how.open;
+          // Several moves can be shown at once; keep their fold-outs in step.
+          $$("details.how", container).forEach((d) => { if (d.open !== howOpen) d.open = howOpen; });
+        });
+        parts.push(how);
+      }
+      return parts;
+    };
+    return {
+      // One or more steps, in order. Several appear when one action causes more than one move.
+      show: (...steps) => container.replaceChildren(...steps.map((s) => el("div", { class: "step-block" }, ...block(s)))),
+      note: (html) => container.replaceChildren(...paras(html)),
+    };
+  }
+
+  // A playground's explanations live in its page as <script type="application/json" data-narration>, keyed by move:
+  // { "move": { "what": "…{t}…", "why": "…", "deep": "…" } }. narrate(key, vars) fills the {placeholders}.
+  // check-snippets.mjs verifies every key passed to a playground's narrate() has an entry with all three layers.
+  function narration(box) {
+    const spec = JSON.parse($("script[data-narration]", box).textContent);
+    const fill = (text, vars) => text.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : (console.warn("narration: no value for", m), m)));
+    return (key, vars) => {
+      const n = spec[key];
+      if (!n) { console.warn("narration: no entry for", key); return { what: key, why: "" }; }
+      return { what: fill(n.what, vars), why: fill(n.why, vars), deep: n.deep && fill(n.deep, vars) };
+    };
+  }
+
   /* ---------------- request / startup tracer ---------------- */
   function initTracer(box) {
     const spec = JSON.parse($("script[type='application/json']", box).textContent);
@@ -209,34 +252,17 @@
     const packet = el("div", { class: "packet", "aria-hidden": "true" });
     lanesBox.append(packet);
 
-    // Optional per-step explanation. Beginner layers first ("what": plain words, "why": why it matters), then
-    // "deep" (what is happening underneath) in a fold-out that stays open across steps once the reader opens it.
-    // Tracers without "what" show "deep" directly, as before.
-    let deep = null;
-    let howOpen = false;
+    // Optional per-step explanation panel (see explainer). Tracers without "what" label it "Under the hood".
+    let ex = null;
     const layered = spec.scenarios.some((sc) => sc.steps.some((st) => st.what));
     if (layered || spec.scenarios.some((sc) => sc.steps.some((st) => st.deep))) {
-      deep = el("div", { class: "deep", "aria-live": "polite" });
+      const deep = el("div", { class: "deep", "aria-live": "polite" });
       result.before(layered ? el("div", { class: "deep-box" }, deep)
         : el("div", { class: "deep-box" }, el("span", { class: "label", text: "Under the hood" }), deep));
+      ex = explainer(deep);
     }
-    const paras = (text) => text.split("\n\n").map((para) => { const p = el("p"); p.innerHTML = para; return p; });
-    const showDeep = (text) => {
-      if (deep) deep.replaceChildren(...paras(text));
-    };
-    const showStep = (s) => {
-      if (!deep) return;
-      if (!s.what) { showDeep(s.deep || s.text); return; }
-      const layer = (name, text) => el("div", { class: "layer" }, el("span", { class: "layer-name", text: name }), ...paras(text));
-      const parts = [layer("What’s happening", s.what), layer("Why it matters", s.why)];
-      if (s.deep) {
-        const how = el("details", { class: "how" }, el("summary", { text: "How it works underneath" }), ...paras(s.deep));
-        how.open = howOpen;
-        how.addEventListener("toggle", () => { howOpen = how.open; });
-        parts.push(how);
-      }
-      deep.replaceChildren(...parts);
-    };
+    const showDeep = (text) => { if (ex) ex.note(text); };
+    const showStep = (s) => { if (ex) ex.show(s); };
 
     let scenario = spec.scenarios[0];
     let i = 0;
@@ -678,16 +704,20 @@
       insert: "INSERT postings: A −1000, B +1000",
       commit: "COMMIT",
     };
-    const explainOut = $("[data-out=explain]", box);
+    const ex = explainer($("[data-out=explain]", box));
+    const line = narration(box);
     let committed, holder, tx, timer;
     let notes = [];
     const plan = () => (lock.checked ? ["begin", "lock", "read", "check", "insert", "commit"] : ["begin", "read", "check", "insert", "commit"]);
     const over = (t) => t.state === "done" || t.state === "rolledback";
 
     const say = (t, text, cls) => { log.append(el("span", cls ? { class: cls } : {}, `T${t.n}  ${text}\n`)); log.scrollTop = log.scrollHeight; };
-    // Plain-language narration of the last move, shown above the SQL log.
-    const explain = (text) => notes.push(text);
     const otherOf = (t) => tx.find((o) => o !== t);
+    // Explain a move in layers, using the entry for `key` in the page's narration. Shown above the SQL log.
+    const narrate = (t, key) => notes.push(line(key, {
+      t: `T${t.n}`, o: `T${otherOf(t).n}`, holder: holder ? `T${holder}` : "",
+      seen: t.seen === null ? "" : cents(t.seen), balance: cents(committed),
+    }));
     const finish = (t, state) => {
       t.state = state;
       if (holder === t.n) {
@@ -701,50 +731,48 @@
       if (over(t)) return false;
       const step = plan()[t.i];
       const o = otherOf(t);
+      // Each narrate() call names its key literally, so check-snippets.mjs can find it.
       if (step === "begin") {
         say(t, "BEGIN");
-        explain(`T${t.n} begins a transaction. Nothing has been read or written yet.`);
+        narrate(t, "begin");
       } else if (step === "lock") {
         if (holder && holder !== t.n) {
           if (t.state !== "waiting") {
             t.state = "waiting"; say(t, `${LABEL.lock}  … waits: T${holder} holds the lock`, "fail");
-            explain(`T${t.n} asks to lock account A, but T${holder} already holds that lock. T${t.n} has to wait until T${holder} commits or rolls back, and it can't read the balance until then.`);
+            narrate(t, "lock-waits");
           }
           return false;
         }
         const waited = t.state === "waiting";
         holder = t.n; t.state = "ready";
         say(t, `${LABEL.lock}  → granted`);
-        explain(waited
-          ? `The lock is free again, so T${t.n} gets it and stops waiting. Its next step reads the balance, and that read will include anything committed while it waited.`
-          : `T${t.n} locks account A. Until T${t.n} finishes, any other transaction that asks for this lock has to wait.`);
+        if (waited) narrate(t, "lock-granted-after-wait"); else narrate(t, "lock-granted");
       } else if (step === "read") {
         // READ COMMITTED: committed rows plus this transaction's own uncommitted ones.
         t.seen = committed + t.pending;
         say(t, `${LABEL.read}  → ${t.seen}`);
-        explain(`T${t.n} reads A's balance: ${cents(t.seen)}.` + (o.pending
-          ? ` T${o.n} has already written a −$10.00 debit, but hasn't committed it, so T${t.n} can't see it.`
-          : committed < START ? " That includes the debit that was already committed." : ""));
+        if (o.pending) narrate(t, "read-hidden");
+        else if (committed < START) narrate(t, "read-after-commit");
+        else narrate(t, "read");
       } else if (step === "check") {
         if (t.seen - SPEND < 0) {
           say(t, `${cents(t.seen)} is not enough → InsufficientFundsException → ROLLBACK, 409`, "fail");
-          explain(`${cents(t.seen)} isn't enough to send $10.00, so T${t.n} refuses. It throws InsufficientFundsException, the transaction rolls back, and the user gets 409. Nothing was written.`);
+          narrate(t, "check-refuse");
           t.i++; finish(t, "rolledback"); return true;
         }
         say(t, `${cents(t.seen)} − $10.00 = ${cents(t.seen - SPEND)} → allowed`);
-        explain(`T${t.n} decides ${cents(t.seen)} is enough.` + (lock.checked
-          ? ` It holds the lock, so nobody else can spend A's money before it writes.`
-          : ` But nothing stops another transaction spending the same money before T${t.n} writes, so this decision may already be out of date.`));
+        if (lock.checked) narrate(t, "check-pass-locked"); else narrate(t, "check-pass-unlocked");
       } else if (step === "insert") {
         t.pending = -SPEND;
         say(t, `${LABEL.insert}  (visible only to T${t.n} until COMMIT)`);
-        explain(`T${t.n} writes its postings: A −$10.00 and B +$10.00. Until T${t.n} commits, only T${t.n} can see them.`);
+        narrate(t, "insert");
       } else if (step === "commit") {
         committed += t.pending; t.pending = 0;
         say(t, `COMMIT → everyone now sees A = ${cents(committed)}`, "ok");
-        explain(`T${t.n} commits. Its debit is now saved and visible to everyone: A is ${cents(committed)}.` +
-          (holder === t.n ? " Its lock on A is released." : "") +
-          (committed < 0 ? " A is negative: the same $10.00 was spent twice." : ""));
+        // A lock and an overdraft can't both happen: the lock is what prevents it.
+        if (committed < 0) narrate(t, "commit-overdrawn");
+        else if (holder === t.n) narrate(t, "commit-release");
+        else narrate(t, "commit");
         t.i++; finish(t, "done"); return true;
       }
       t.i++;
@@ -766,7 +794,7 @@
         c.btn.disabled = over(t) || t.state === "waiting";
       });
       if (notes.length) {
-        explainOut.replaceChildren(...notes.map((text) => el("p", { text })));
+        if (typeof notes[0] === "string") ex.note(notes[0]); else ex.show(...notes);
         notes = [];
       }
       committedOut.textContent = cents(committed);
@@ -791,7 +819,7 @@
       committed = START; holder = null;
       tx = [1, 2].map((n) => ({ n, i: 0, seen: null, pending: 0, state: "ready" }));
       log.replaceChildren();
-      notes = ["Press Step T1 or Step T2 to move one transaction forward, or press a Play button. Each move is explained here in plain words."];
+      notes = ["Press <b>Step T1</b> or <b>Step T2</b> to move one transaction forward, or press a Play button. Each move says what is happening in plain words and why it matters. Open <b>How it works underneath</b> to see what PostgreSQL is doing."];
       $$("[data-order]", box).forEach((b) => b.setAttribute("aria-pressed", "false"));
       render();
     };

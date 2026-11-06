@@ -2,7 +2,8 @@
 //   node docs/book/tools/check-snippets.mjs [book-directory]
 // Checks every page in docs/book/: code excerpts match their data-source file (contiguous lines,
 // indentation-insensitive); tour anchors exist in their excerpt; glossary links resolve against glossary.js;
-// tracer JSON is valid and beginner layers are complete; links between pages and to headings resolve;
+// tracer JSON is valid and beginner layers are complete; playground narration has what/why/deep for every move
+// book.js narrates, and nothing unused; links between pages and to headings resolve;
 // explorer panes resolve; quiz answers exist; the contents rail is identical on every page and its quiz totals
 // match the quizzes.
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -36,6 +37,7 @@ if (ids["glossary.html"]) for (const id of terms) ids["glossary.html"].add("term
 
 let figures = 0, tracers = 0, questions = 0;
 const quizCounts = {};
+const narrationKeys = new Map(); // key -> page that defines it
 // Links, in pages and in glossary definitions. Plain and JSON-escaped (href=\"…\") forms.
 const checkLinks = (where, text, page) => {
   for (const [, href] of text.matchAll(/href=\\?"([^"\\]*)\\?"/g)) {
@@ -100,6 +102,18 @@ for (const page of pages) {
     }
   }
 
+  // 3b. Playground narration: every entry has all three layers (ADR 0007).
+  for (const [, json] of doc.matchAll(/<script type="application\/json" data-narration>([\s\S]*?)<\/script>/g)) {
+    let spec;
+    try { spec = JSON.parse(json); } catch (e) { errors.push(`${page} narration: invalid JSON (${e.message})`); continue; }
+    for (const [key, n] of Object.entries(spec)) {
+      for (const layer of ["what", "why", "deep"]) {
+        if (!(typeof n[layer] === "string" && n[layer].trim())) errors.push(`${page} narration "${key}": needs a non-empty "${layer}"`);
+      }
+      narrationKeys.set(key, page);
+    }
+  }
+
   // 4. Links and explorer panes
   checkLinks(page, doc, page);
   const panes = new Set([...doc.matchAll(/class="pane" data-name="([^"]+)"/g)].map((m) => m[1]));
@@ -131,8 +145,13 @@ for (const page of pages) {
   if (/data-score="[^"]+"(?! data-total)/.test(html[page])) errors.push(`${page}: every data-score needs data-total`);
 }
 
+// 7. Narration keys used by book.js (narrate(t, "key") with a literal key) exist, and none is defined but unused.
+const used = new Set([...readFileSync(join(bookDir, "book.js"), "utf8").matchAll(/\bnarrate\([^,()]+,\s*"([\w-]+)"\)/g)].map((m) => m[1]));
+for (const key of used) if (!narrationKeys.has(key)) errors.push(`book.js narrates "${key}", but no page's data-narration defines it`);
+for (const [key, page] of narrationKeys) if (!used.has(key)) errors.push(`${page} narration "${key}" is never used by book.js`);
+
 if (errors.length) {
   console.error(`Textbook check failed (${errors.length}):\n  - ` + errors.join("\n  - "));
   process.exit(1);
 }
-console.log(`Textbook check passed: ${pages.length} pages, ${figures} code excerpts, ${terms.size} glossary terms, ${tracers} tracers, ${questions} quiz questions.`);
+console.log(`Textbook check passed: ${pages.length} pages, ${figures} code excerpts, ${terms.size} glossary terms, ${tracers} tracers, ${narrationKeys.size} narrated moves, ${questions} quiz questions.`);

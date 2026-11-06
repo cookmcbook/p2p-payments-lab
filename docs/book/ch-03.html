@@ -369,6 +369,82 @@ p2p_lab=# DELETE FROM posting;
         <pre class="printout" aria-live="polite"></pre>
         <div class="verdict" aria-live="polite"></div>
       </div>
+      <!-- Narration for each move, in layers (ADR 0007). book.js picks the key; {t} is the moving transaction,
+           {o} the other one, {holder} the lock holder, {seen} the balance {t} read, {balance} A's committed balance. -->
+      <script type="application/json" data-narration>
+      {
+        "begin": {
+          "what": "{t} begins a transaction: a group of database steps that are saved together at COMMIT, or not at all. Nothing has been read or written yet.",
+          "why": "Everything {t} writes stays private until it commits. That keeps a half-finished transfer invisible to everyone else, and it's also why the other transaction can't see {t}'s debit early.",
+          "deep": "In the real service this starts when <code>LedgerService.transfer</code> is called: Spring's <a href=\"hood.html#h-proxy\">transaction proxy</a> borrows a connection from the HikariCP pool and switches off auto-commit, and the PostgreSQL driver sends <code>BEGIN</code> along with the first query.\n\nUnder READ COMMITTED, PostgreSQL's default, <code>BEGIN</code> doesn't freeze a view of the data. Each later statement takes its own fresh snapshot when it starts."
+        },
+        "lock-granted": {
+          "what": "{t} locks account A's row. Until {t} commits or rolls back, any other transaction that asks for the same lock has to wait.",
+          "why": "The lock makes debits of A take turns: only one can be between “read the balance” and “commit” at a time. Without it, two debits can both decide the same $10.00 is free.",
+          "deep": "This is <code>JpaLedgerRepository.lockForDebit</code>: <code>SELECT … FROM account WHERE id = A FOR NO KEY UPDATE</code>. It changes no data. PostgreSQL records the lock on the row itself, writing {t}'s transaction id into the row header.\n\nPlain SELECTs never wait for it. Neither do the foreign-key checks that posting INSERTs run against <code>account</code>, because they take the weaker KEY SHARE lock, which NO KEY UPDATE allows. That's why the code uses this mode instead of FOR UPDATE: see <a href=\"#c3-lock\">The fix</a> below."
+        },
+        "lock-waits": {
+          "what": "{t} asks to lock account A, but {holder} already holds that lock. {t} has to wait until {holder} commits or rolls back, and it can't read the balance until then.",
+          "why": "This wait is the fix working. {t} hasn't read anything yet, so when it's let through, it will read a balance that already includes whatever {holder} did.",
+          "deep": "{t}'s SELECT is now asleep inside PostgreSQL. Its Java thread is blocked waiting for the reply and keeps its pool connection the whole time.\n\nPostgreSQL sees {holder}'s transaction id on the row and queues {t} behind {holder}'s whole transaction. In <code>pg_stat_activity</code>, {t} shows <code>wait_event = transactionid</code> (<a href=\"hood.html#h-pg\">Under the hood</a> has a recording). Nothing limits the wait unless <code>lock_timeout</code> is set; exercise 6 adds one."
+        },
+        "lock-granted-after-wait": {
+          "what": "{o} has finished, so its lock is released. {t} gets the lock and stops waiting. Its next step reads the balance, and that read will include anything {o} committed.",
+          "why": "The order is now forced: {t}'s balance check happens strictly after {o}'s commit, so the two can't both spend the same money.",
+          "deep": "When {o}'s transaction ends, PostgreSQL wakes the transactions queued behind it. Before granting the lock, it checks whether {o} changed A's row; if it had, {t} would lock the newest version. Here {o} only added posting rows, so {t} locks the same account row.\n\nThe wait cost {t} time, not correctness. In the recorded run above, a single wait took 4.2 seconds."
+        },
+        "read": {
+          "what": "{t} reads A's balance: {seen}.",
+          "why": "{t} will base its decision on this number. The question is whether it's still true by the time {t} writes.",
+          "deep": "The balance isn't stored anywhere; it's computed: <code>SELECT COALESCE(SUM(amount_minor), 0) FROM posting WHERE account_id = A</code>. In READ COMMITTED this statement takes a snapshot as it starts, so it sees every posting committed before that moment, plus {t}'s own uncommitted ones."
+        },
+        "read-hidden": {
+          "what": "{t} reads A's balance: {seen}. {o} has already written a −$10.00 debit but hasn't committed it, so {t} can't see it.",
+          "why": "This is the moment the race is lost. {t} is about to decide using a balance that is already out of date.",
+          "deep": "{o}'s new posting rows are already in the table, stamped with {o}'s transaction id. {t}'s snapshot records which transactions were still running when it was taken, and skips rows they created. That's isolation doing its job: each transaction is correct on its own, and the bug exists only in how the two overlap."
+        },
+        "read-after-commit": {
+          "what": "{t} reads A's balance: {seen}. That includes the debit that was already committed.",
+          "why": "A read that runs after the other transaction's commit sees the true balance. The lock's job is to make sure the read always happens then, not by luck of timing.",
+          "deep": "This SELECT's snapshot was taken after the commit, so the committed posting rows are visible. The same statement run a moment earlier, before that commit, would have returned the old balance."
+        },
+        "check-refuse": {
+          "what": "{seen} isn't enough to send $10.00, so {t} refuses. It throws InsufficientFundsException, the transaction rolls back, and the user gets 409. Nothing was written.",
+          "why": "Refusing is correct: Alice had $10.00, and the other transfer already spent it.",
+          "deep": "<code>LedgerAccount.checkDebit</code> throws <code>InsufficientFundsException</code>, a <code>RuntimeException</code>. Spring's transaction proxy rolls back on runtime exceptions, and ROLLBACK also releases any lock {t} held. <code>LedgerExceptionHandler</code> turns the exception into a <code>409 Conflict</code> problem response."
+        },
+        "check-pass-locked": {
+          "what": "{t} decides {seen} is enough. It holds the lock, so nobody else can spend A's money before it writes.",
+          "why": "Here the check stays true until {t} acts on it, because the lock stops anyone else slipping in between.",
+          "deep": "The check is plain Java (<code>LedgerAccount.checkDebit</code>), not SQL. PostgreSQL isn't asked. What makes it safe is that every other debit of A is stuck at its lock request until {t} ends."
+        },
+        "check-pass-unlocked": {
+          "what": "{t} decides {seen} is enough. But nothing stops another transaction spending the same money before {t} writes, so this decision may already be out of date.",
+          "why": "This is check-then-act: the check and the write are separate steps, and the world can change in the gap between them.",
+          "deep": "PostgreSQL has no idea a decision was made. It sees a SELECT, then later some INSERTs, each valid on its own. The decision lives in a Java variable, where the database can't see it, so no constraint can protect it."
+        },
+        "insert": {
+          "what": "{t} writes its postings: A −$10.00 and B +$10.00. Until {t} commits, only {t} can see them.",
+          "why": "Both postings are in one transaction, so they become visible together or not at all, and the entry always balances.",
+          "deep": "In the real service, Hibernate keeps these INSERTs in memory and sends them just before COMMIT (<a href=\"hood.html#h-jpa\">Under the hood</a> shows the log). The race works the same either way: what matters is that the balance was read before anything was written.\n\nThe new rows are stamped with {t}'s transaction id, so other snapshots skip them until {t} commits."
+        },
+        "commit": {
+          "what": "{t} commits. Its debit is now saved and visible to everyone: A is {balance}.",
+          "why": "From now on, every new read of A's balance includes this debit.",
+          "deep": "At COMMIT, PostgreSQL first runs the deferred trigger <code>posting_entry_balanced</code>, which checks that the entry's postings sum to zero. Then it writes a commit record to its write-ahead log and marks {t}'s transaction id as committed. Every snapshot taken after that moment sees {t}'s rows."
+        },
+        "commit-release": {
+          "what": "{t} commits. Its debit is now saved and visible to everyone: A is {balance}. Its lock on A is released.",
+          "why": "The lock is released at commit, not before, so whoever goes next reads a balance that already includes this debit.",
+          "deep": "A row lock is held until its transaction ends; there is no way to release it earlier. Commit and unlock happen together, and PostgreSQL then wakes any transaction queued behind {t}.\n\nThe deferred trigger <code>posting_entry_balanced</code> ran just before, checking that the entry sums to zero."
+        },
+        "commit-overdrawn": {
+          "what": "{t} commits. Its debit is now saved and visible to everyone: A is {balance}. A is negative: the same $10.00 was spent twice.",
+          "why": "This is the bug the chapter is about. Every entry balances, so the ledger still adds up, but Alice spent money she didn't have.",
+          "deep": "Nothing failed. The deferred trigger passed, because each entry sums to zero. No constraint can say “balance ≥ 0”: the balance is a SUM over many rows, and a CHECK constraint only sees one row at a time. The defence has to stop the two transactions overlapping, which is what the lock does."
+        }
+      }
+      </script>
       <p class="fig-cap">The playground follows PostgreSQL's READ COMMITTED rules: a read sees committed rows plus the transaction's own, and an INSERT stays invisible to the other transaction until COMMIT. Its outcomes match the recorded runs below.</p>
     </div>
 
