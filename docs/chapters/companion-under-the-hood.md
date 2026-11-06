@@ -1,6 +1,6 @@
 # Companion — Under the hood: Spring, JPA/Hibernate and Docker
 
-Read alongside Chapters 1 and 2. The interactive version (`docs/book/index.html#hood`) animates everything below; this file is the plain-text reference. Every output here was recorded on 29 October 2026 from this repository, using `infra/compose.debug.yaml` ([ADR 0004](../adr/0004-under-the-hood-evidence.md)). Outputs are abridged.
+Read alongside Chapters 1 and 2. The interactive version ([`docs/book/hood.html`](../book/hood.html)) animates everything below; this file is the plain-text reference. Every output here was recorded on 29 October 2026 from this repository, using `infra/compose.debug.yaml` ([ADR 0004](../adr/0004-under-the-hood-evidence.md)). Outputs are abridged.
 
 ## Learning objectives
 

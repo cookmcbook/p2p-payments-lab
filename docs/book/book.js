@@ -41,45 +41,33 @@
     if (saved !== "system") apply(saved); else $$(".theme-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === "system")));
   }
 
-  /* ---------------- router (one view per chapter) ---------------- */
-  function initRouter() {
-    const views = $$("[data-view]");
-    const names = views.map((v) => v.dataset.view);
-    const show = () => {
-      const want = location.hash.slice(1);
-      const name = names.includes(want) ? want : "home";
-      views.forEach((v) => (v.hidden = v.dataset.view !== name));
-      $$(".toc a").forEach((a) => a.toggleAttribute("aria-current", a.getAttribute("href") === "#" + name));
-      $$(".toc a[aria-current]").forEach((a) => a.setAttribute("aria-current", "page"));
-      buildSubToc(name);
-      $(".rail").classList.remove("open");
-      window.scrollTo(0, 0);
-      const view = views.find((v) => v.dataset.view === name);
-      document.title = (view.dataset.title ? view.dataset.title + " · " : "") + "P2P Payments Lab Textbook";
-      view.dispatchEvent(new CustomEvent("viewshown"));
-    };
-    window.addEventListener("hashchange", show);
-    show();
-    // <a href="#view" data-jump="heading-id">: open the view, then scroll to a heading inside it.
-    document.addEventListener("click", (e) => {
-      const a = e.target.closest("a[data-jump]");
-      if (!a) return;
-      e.preventDefault();
-      if (location.hash !== a.getAttribute("href")) { location.hash = a.getAttribute("href"); }
-      const target = document.getElementById(a.dataset.jump);
-      if (target) requestAnimationFrame(() => target.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth" }));
-    });
+  /* ---------------- navigation (one page per chapter) ---------------- */
+  const pageName = () => location.pathname.split("/").pop() || "index.html";
+
+  // Links from the single-page edition looked like index.html#ch-03. Send them to the chapter's own page.
+  // Returns true when the page is being replaced, so boot can stop.
+  function redirectOldLink() {
+    const old = location.hash.slice(1);
+    if (pageName() !== "index.html" || !$(`.toc a[href="${old}.html"]`)) return false;
+    location.replace(old + ".html");
+    return true;
+  }
+
+  function initNav() {
+    const link = $$(".toc a").find((a) => a.getAttribute("href") === pageName());
+    if (link) link.setAttribute("aria-current", "page");
+    buildSubToc(link);
     const menu = $(".topbar button");
     if (menu) menu.addEventListener("click", () => {
       const open = $(".rail").classList.toggle("open");
       menu.setAttribute("aria-expanded", String(open));
     });
+    // A tap on an in-page link (#heading) should close the mobile contents panel.
+    $(".rail").addEventListener("click", (e) => { if (e.target.closest("a")) $(".rail").classList.remove("open"); });
   }
 
-  function buildSubToc(name) {
-    $$(".subtoc").forEach((s) => s.remove());
-    const link = $(`.toc a[href="#${name}"]`);
-    const view = $(`[data-view="${name}"]`);
+  function buildSubToc(link) {
+    const view = $("[data-view]");
     if (!link || !view) return;
     const heads = $$("h2[id]", view);
     if (!heads.length) return;
@@ -91,19 +79,29 @@
     link.parentElement.append(list);
   }
 
-  /* ---------------- glossary popovers ---------------- */
+  /* ---------------- glossary (data in glossary.js) ---------------- */
+  const glossary = new Map((window.BOOK_GLOSSARY || []).map(([id, term, html]) => [id, { term, html }]));
+  const fragment = (html) => { const t = document.createElement("template"); t.innerHTML = html; return t.content; };
+
+  // glossary.html: render every entry so glossary.html#term-x links land on their definition.
+  function initGlossaryPage() {
+    const dl = $("[data-glossary]");
+    if (!dl) return;
+    for (const [id, { term, html }] of glossary) dl.append(el("dt", { id: "term-" + id, text: term }), el("dd", {}, fragment(html)));
+    const target = location.hash && document.getElementById(location.hash.slice(1));
+    if (target) target.scrollIntoView();
+  }
+
   function initTerms() {
     let pop = null;
     const close = () => { if (pop) { pop.remove(); pop = null; } };
     document.addEventListener("click", (e) => {
       const t = e.target.closest(".term");
       if (!t) { if (!e.target.closest(".term-pop")) close(); return; }
-      const dt = document.getElementById("term-" + t.dataset.term);
+      const entry = glossary.get(t.dataset.term);
       close();
-      if (!dt) return;
-      const dd = dt.nextElementSibling;
-      pop = el("div", { class: "term-pop", role: "dialog" }, el("b", { text: dt.textContent }));
-      pop.append(...Array.from(dd.childNodes).map((n) => n.cloneNode(true)));
+      if (!entry) return;
+      pop = el("div", { class: "term-pop", role: "dialog" }, el("b", { text: entry.term }), fragment(entry.html));
       document.body.append(pop);
       const r = t.getBoundingClientRect();
       const left = Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - pop.offsetWidth - 16);
@@ -313,7 +311,6 @@
     stepBtn.addEventListener("click", () => { stop(); step(); });
     resetBtn.addEventListener("click", reset);
     window.addEventListener("resize", () => movePacket(scenario.steps[Math.max(0, i - 1)].lane));
-    box.closest("[data-view]").addEventListener("viewshown", reset);
     reset();
   }
 
@@ -330,6 +327,8 @@
   }
 
   /* ---------------- quizzes ---------------- */
+  // Answers are stored per quiz ("quiz.<id>"). Each quiz also stores its score ("quizscore.<id>") so the contents
+  // rail on other pages can show it without knowing the answer key.
   const quizListeners = [];
   function quizScore(id) {
     const box = $(`.quiz[data-quiz="${id}"]`);
@@ -338,7 +337,9 @@
     const answers = store.get("quiz." + id, {});
     let answered = 0, right = 0;
     qs.forEach((q, idx) => { if (answers[idx]) { answered++; if (answers[idx] === q.dataset.answer) right++; } });
-    return { total: qs.length, answered, right };
+    const score = { total: qs.length, answered, right };
+    store.set("quizscore." + id, score);
+    return score;
   }
   function initQuiz(box) {
     const id = box.dataset.quiz;
@@ -391,8 +392,11 @@
   function initScores() {
     const paint = () => {
       $$("[data-score]").forEach((node) => {
-        const s = quizScore(node.dataset.score);
-        if (!s) return;
+        const id = node.dataset.score;
+        const total = Number(node.dataset.total);
+        // The quiz on this page is the live source; others use the score saved when that page was last opened.
+        const saved = store.get("quizscore." + id, null);
+        const s = quizScore(id) || (saved && saved.total === total ? saved : { total, answered: 0, right: 0 });
         node.textContent = s.answered ? `${s.right}/${s.total}` : `quiz 0/${s.total}`;
       });
     };
@@ -815,7 +819,9 @@
 
   /* ---------------- boot ---------------- */
   function boot() {
+    if (redirectOldLink()) return;
     initTheme();
+    initGlossaryPage();
     $$("figure.code").forEach(initCode);
     $$(".tracer").forEach(initTracer);
     $$(".quiz").forEach(initQuiz);
@@ -829,7 +835,7 @@
     $$("[data-playground=cache]").forEach(initCache);
     $$("[data-playground=race]").forEach(initRace);
     $$(".explorer").forEach(initExplorer);
-    initRouter();
+    initNav();
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();

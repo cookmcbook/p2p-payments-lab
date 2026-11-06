@@ -1,6 +1,6 @@
 # Chapter 3 — A ledger that can't lose a cent, even under a crowd
 
-The interactive version, with tracers, the race playground and a quiz, is `docs/book/index.html#ch-03`. Every log line and number below was recorded from the running service (or its tests) on 30 October 2026; most are abridged, and say so.
+The interactive version, with tracers, the race playground and a quiz, is [`docs/book/ch-03.html`](../book/ch-03.html). Every log line and number below was recorded from the running service (or its tests) on 30 October 2026; most are abridged, and say so.
 
 ## Learning objectives
 

@@ -158,7 +158,7 @@ Expected: `Tests run: 24, Failures: 0, Errors: 0` and `BUILD SUCCESS`.
 6. **Log hygiene.** `docker compose logs payment-api | grep "account opened"`. *Expect* the id and currency but no display name.
 7. **Close the tab gap.** In psql, `INSERT INTO account VALUES (gen_random_uuid(), E'\t', 'USD', now());` *succeeds*: `btrim()` removes only spaces, so a tab-only name passes the `CHECK`, even though Bean Validation and `String.isBlank()` both reject it. Write `V3__account_display_name_not_whitespace.sql` that drops `account_display_name_check` and adds a check rejecting any all-whitespace name (hint: `display_name ~ '\S'`). Add an integration test that inserts `E'\t'` and expects `DataIntegrityViolationException`. Consider what happens if an existing row already violates the new rule.
 
-The interactive edition of this chapter, with an animated request tracer, a defense-in-depth playground, an API simulator and a quiz, is in [docs/book/index.html](../book/index.html#ch-02).
+The interactive edition of this chapter, with an animated request tracer, a defense-in-depth playground, an API simulator and a quiz, is in [docs/book/ch-02.html](../book/ch-02.html).
 
 ## Review questions
 
