@@ -14,12 +14,13 @@ class CapabilitiesControllerTest {
     @Autowired MockMvc mvc;
 
     @Test
-    void reportsThatPaymentProcessingIsNotYetAvailable() throws Exception {
+    void reportsThatPaymentsWithIdempotencyAreAvailable() throws Exception {
         mvc.perform(get("/api/v1/payments/capabilities"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.paymentProcessingEnabled").value(false))
+            .andExpect(jsonPath("$.paymentProcessingEnabled").value(true))
+            .andExpect(jsonPath("$.idempotencyEnabled").value(true))
             .andExpect(jsonPath("$.accountsEnabled").value(true))
             .andExpect(jsonPath("$.ledgerEnabled").value(true))
-            .andExpect(jsonPath("$.chapter").value(3));
+            .andExpect(jsonPath("$.chapter").value(4));
     }
 }

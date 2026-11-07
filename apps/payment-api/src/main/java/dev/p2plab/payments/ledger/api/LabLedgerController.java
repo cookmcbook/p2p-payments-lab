@@ -15,9 +15,9 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Lab-only door into the ledger, so the Chapter 3 experiments can move simulated money through the running
- * service. Exists only with the {@code lab} profile (infra/compose.lab.yaml). No authentication and no
- * idempotency: the real payment API, with both, is Chapter 4. See ADR 0005.
+ * Lab-only door into the ledger: puts simulated money into an account, so the experiments have something to
+ * spend. Exists only with the {@code lab} profile (infra/compose.lab.yaml), and has no authentication. Chapter 3's
+ * transfer endpoint here was replaced by {@code POST /api/v1/payments} in Chapter 4. See ADR 0005.
  */
 @Profile("lab")
 @RestController
@@ -29,23 +29,13 @@ public class LabLedgerController {
 
     public LabLedgerController(LedgerService ledger) {
         this.ledger = ledger;
-        log.warn("lab profile active: /lab/ledger endpoints move simulated money WITHOUT authentication; local use only");
+        log.warn("lab profile active: /lab/ledger/funding issues simulated money WITHOUT authentication; local use only");
     }
 
     @PostMapping("/funding")
     @ResponseStatus(HttpStatus.CREATED)
     public JournalEntryResponse fund(@Valid @RequestBody FundingRequest request) {
-        return JournalEntryResponse.from(ledger.fund(request.accountId(), money(request.amountMinor(), request.currency())));
-    }
-
-    @PostMapping("/transfers")
-    @ResponseStatus(HttpStatus.CREATED)
-    public JournalEntryResponse transfer(@Valid @RequestBody TransferRequest request) {
-        return JournalEntryResponse.from(ledger.transfer(
-            request.fromAccountId(), request.toAccountId(), money(request.amountMinor(), request.currency())));
-    }
-
-    private static Money money(long amountMinor, String currency) {
-        return new Money(amountMinor, Currency.valueOf(currency));
+        return JournalEntryResponse.from(ledger.fund(request.accountId(),
+            new Money(request.amountMinor(), Currency.valueOf(request.currency()))));
     }
 }

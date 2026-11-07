@@ -37,9 +37,9 @@ A milestone is done only when the code compiles, appropriate tests pass, documen
 
 ## Suggested next task
 
-Chapter 4: payment API (`POST /api/v1/payments`) built on `LedgerService`. Cover:
-- explicit lifecycle states (accepted, processing, completed, rejected, indeterminate);
-- holds, so the available balance differs from the ledger balance;
-- idempotency keys scoped to the payer and a request fingerprint, with a retention policy.
+Chapter 5: authentication, authorization and payer ownership with Spring Security. Cover:
+- replace the unauthenticated `X-Payer-Account-Id` header with the authenticated principal, keeping idempotency scoped to `(payer, key)` (ADR 0009);
+- only the payer (and, if justified, the payee) can read a payment or an account's balance;
+- remove the lab funding endpoint before authentication lands (ADR 0005), and decide how simulated money is issued afterwards.
 
-Replace the lab transfer endpoint. Keep the Chapter 3 invariants and concurrency tests green.
+Keep the Chapter 3–4 invariants, idempotency and concurrency tests green.

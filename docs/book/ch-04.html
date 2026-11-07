@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chapter 4 · P2P Payments Lab Textbook</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<link rel="stylesheet" href="book.css">
+</head>
+<body>
+<!--
+  The interactive edition of docs/chapters/*.md.
+  Code excerpts inside <figure class="code"> must match the real source file named in data-source;
+  docs/book/tools/check-snippets.mjs enforces this in CI. Edit both in the same commit.
+-->
+<div class="topbar">
+  <b>P2P Payments Lab</b>
+  <button class="btn ghost" type="button" aria-expanded="false" aria-controls="rail">Contents</button>
+</div>
+<div class="shell">
+  <nav class="rail" id="rail" aria-label="Book contents">
+    <a class="brand" href="index.html"><span>Living textbook</span><b>P2P Payments Lab</b></a>
+    <ul class="toc">
+      <li><a href="index.html"><span class="no">00</span><span>How to use this book</span></a></li>
+      <li><a href="ch-01.html"><span class="no">01</span><span>Runnable service</span><span class="score" data-score="ch-01" data-total="6"></span></a></li>
+      <li><a href="ch-02.html"><span class="no">02</span><span>Accounts</span><span class="score" data-score="ch-02" data-total="10"></span></a></li>
+      <li><a href="hood.html"><span class="no">UH</span><span>Under the hood</span><span class="score" data-score="hood" data-total="10"></span></a></li>
+      <li><a href="ch-03.html"><span class="no">03</span><span>Ledger and concurrency</span><span class="score" data-score="ch-03" data-total="10"></span></a></li>
+      <li><a href="ch-04.html"><span class="no">04</span><span>Payments and idempotency</span><span class="score" data-score="ch-04" data-total="8"></span></a></li>
+      <li><a href="glossary.html"><span class="no">Gl</span><span>Glossary</span></a></li>
+    </ul>
+    <ul class="toc pending" aria-label="Planned chapters">
+      <li><span class="toc-planned">05 · Authentication</span></li>
+      <li><span class="toc-planned">06 · Kafka and the outbox</span></li>
+      <li><span class="toc-planned">07 · Bank adapter and reconciliation</span></li>
+    </ul>
+    <div class="rail-foot">
+      <div class="theme-toggle" role="group" aria-label="Theme">
+        <button type="button" data-mode="system">Auto</button>
+        <button type="button" data-mode="light">Light</button>
+        <button type="button" data-mode="dark">Dark</button>
+      </div>
+      <div>Fictional platform. No real money, banks or rails. Quiz answers are saved only in this browser.</div>
+    </div>
+  </nav>
+
+  <main>
+  <!-- ================================================================ CHAPTER 4 -->
+  <section class="view" data-view="ch-04">
+    <div class="prose">
+      <p class="eyebrow">Chapter 4</p>
+      <h1>A payment you can safely send twice</h1>
+      <p class="lede">The internet loses answers. A phone sends "pay Bob $3.00", the server does it, and the reply never arrives. This chapter builds the payment API so that the phone can simply ask again, and get the same payment back instead of paying twice.</p>
+      <div class="objectives">
+        <span class="label">You will be able to</span>
+        <ul>
+          <li>explain why a payment needs a stored record with a <button class="term" data-term="payment-state">state</button>, not just a status code;</li>
+          <li>name the five states, the moves allowed between them, and which state means "reconcile, don't retry";</li>
+          <li>explain a <button class="term" data-term="hold">hold</button>, and why the <button class="term" data-term="available-balance">available balance</button> differs from the <button class="term" data-term="ledger-balance">ledger balance</button> while a payment is in flight;</li>
+          <li>say how an <button class="term" data-term="idempotency-key">idempotency key</button> and a <button class="term" data-term="request-fingerprint">request fingerprint</button> turn a retry into a <button class="term" data-term="replay">replay</button>, even for 20 retries at once;</li>
+          <li>state the <button class="term" data-term="retention-policy">retention policy</button> and what it costs a client who retries too late;</li>
+          <li>explain why the payment runs as three transactions, in a separate bean.</li>
+        </ul>
+      </div>
+      <div class="callout"><p><b>How to read this chapter.</b> Each section starts with the idea in a few sentences. The tracer, the code tour and the <b>Under the hood</b> boxes go deeper. Every response, log line and number was recorded from this project's running service, or its tests, on 6 November 2026. Most are abridged (timestamps, package names and ids shortened), and the captions say so.</p></div>
+
+      <details class="reveal primer"><summary>New to backend work? Start here: five ideas this chapter builds on</summary><div>
+        <p>Each idea below has three parts: what it is, why this chapter needs it, and where you'll see it. Chapter 3's primer covers threads, transactions, locks and exceptions.</p>
+        <dl>
+          <dt>1 · A timeout tells you nothing</dt>
+          <dd><p><b>What:</b> a <b>timeout</b> is a client giving up on waiting for an answer. It doesn't stop the server. The server may still be working, and may finish.</p>
+          <p><b>Why:</b> after a timeout the client can't tell "the payment never happened" from "it happened and the answer got lost". Retrying blindly can pay twice; not retrying can leave the user unsure.</p>
+          <p><b>Where:</b> the <b>Client times out</b> scenario in the tracer, recorded with a client that gave up after 2 s while the server finished 0.7 s later.</p></dd>
+
+          <dt>2 · Idempotent means "twice is the same as once"</dt>
+          <dd><p><b>What:</b> an operation is <button class="term" data-term="idempotency">idempotent</button> if repeating it changes nothing further. Pressing a lift's call button twice is idempotent; ordering a pizza twice is not.</p>
+          <p><b>Why:</b> making "pay" idempotent makes retrying safe, which is the only cure for a lost answer.</p>
+          <p><b>Where:</b> the <code>Idempotency-Key</code> header on <code>POST /api/v1/payments</code>, and the <code>idempotency_key</code> table.</p></dd>
+
+          <dt>3 · A state machine is a list of allowed moves</dt>
+          <dd><p><b>What:</b> a <b>state machine</b> is a fixed set of states and the moves allowed between them. Anything not on the list is refused.</p>
+          <p><b>Why:</b> a payment that jumps from "accepted" straight to "completed", or comes back to life after "rejected", is a bug that can move money wrongly. Listing the allowed moves makes such bugs throw instead.</p>
+          <p><b>Where:</b> <code>PaymentStatus.canMoveTo</code>, and the database <code>CHECK</code>s in <code>V4__payments.sql</code>.</p></dd>
+
+          <dt>4 · A hash is a fingerprint of some data</dt>
+          <dd><p><b>What:</b> a <b>hash</b> such as SHA-256 turns any text into a fixed-length string (64 hex characters). The same text always gives the same hash; a tiny change gives a completely different one.</p>
+          <p><b>Why:</b> to check that a retry asks for <em>the same</em> payment, the server compares the hash of the new request with the one it stored the first time.</p>
+          <p><b>Where:</b> <code>RequestFingerprint.of</code>.</p></dd>
+
+          <dt>5 · HTTP 201, 202 and 422</dt>
+          <dd><p><b>What:</b> <code>201 Created</code>: a new resource exists. <code>202 Accepted</code>: the request was taken but isn't finished. <code>422 Unprocessable Content</code>: the request is well formed but can't be done as asked.</p>
+          <p><b>Why:</b> clients act on the code first. Here, 201 means "this payment is final, read its <code>status</code>", 202 means "ask again with the same key", and 422 means "you reused a key for something else".</p>
+          <p><b>Where:</b> <code>PaymentController</code> and <code>PaymentExceptionHandler</code>.</p></dd>
+        </dl>
+      </div></details>
+
+      <h2 id="c4-model" data-short="Lifecycle">Mental model: a payment is a record with a state</h2>
+      <p>In Chapter 3, a transfer either happened (201) or didn't (409), and nothing remembered asking. That's fine inside one database transaction, and hopeless across a network. A payment is different: <b>it is a row in the <code>payment</code> table</b>, created when the request arrives, with a <button class="term" data-term="payment-state">status</button> that only moves forward.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Status</th><th>In plain words</th><th>Money</th><th>Final?</th></tr></thead>
+        <tbody>
+          <tr><td><code>ACCEPTED</code></td><td>Recorded, and the payer's money is reserved</td><td>Held, not moved</td><td>No</td></tr>
+          <tr><td><code>PROCESSING</code></td><td>We've started moving it</td><td>Held, not moved</td><td>No</td></tr>
+          <tr><td><code>COMPLETED</code></td><td>Done: the journal entry is posted</td><td>Moved</td><td>Yes</td></tr>
+          <tr><td><code>REJECTED</code></td><td>Refused, with a reason (here: <code>INSUFFICIENT_FUNDS</code>)</td><td>Never held</td><td>Yes</td></tr>
+          <tr><td><code>INDETERMINATE</code></td><td>We asked a bank and don't know if it moved the money</td><td>Unknown</td><td>No, but <b>never retried automatically</b></td></tr>
+        </tbody>
+      </table></div>
+      <p>The allowed moves are <code>ACCEPTED → PROCESSING → COMPLETED</code>; <code>PROCESSING → INDETERMINATE</code>; and <code>INDETERMINATE → COMPLETED | REJECTED</code>, by <button class="term" data-term="reconciliation">reconciliation</button> only. <b>No Chapter 4 code reaches <code>INDETERMINATE</code>.</b> Moving money inside our own ledger is one database transaction, and its outcome is never unknown. It is defined and tested now so that Chapter 7, which calls a (mock) bank, slots into the same shape.</p>
+
+      <h2 id="c4-holds" data-short="Holds">Holds: money that's spoken for</h2>
+      <p>Between "accepted" and "completed", the payer's money must not be spendable by anything else. A <button class="term" data-term="hold">hold</button> reserves it: a row in <code>ledger_hold</code> that lowers the <b>available</b> balance and leaves the <b>ledger</b> balance alone. Capturing the hold posts the real journal entry.</p>
+      <div class="evidence"><pre class="printout">after step 1 only (ACCEPTED, $6.00 held of $10.00):
+{"accountId":"…alice","currency":"USD","ledgerMinor":1000,"availableMinor":400}
+after COMPLETED ($3.00 payment):
+{"accountId":"…alice","currency":"USD","ledgerMinor":700,"availableMinor":700}</pre></div>
+      <p class="fig-cap">The first line is asserted by <code>PaymentIntegrationTest.aHoldLowersAvailableButNotLedger…</code>; the second was recorded from the running service. Ids shortened.</p>
+      <p>A hold spends <em>available</em> money, so it has exactly Chapter 3's <button class="term" data-term="check-then-act">check-then-act</button> problem. The fix is the same: <code>placeHold</code> locks the account row with <code>FOR NO KEY UPDATE</code> before it reads the available balance. And every debit now checks available, not ledger, so a direct transfer can't spend held money either. Both rules have tests that fail if you remove them; both were removed on purpose while writing this chapter.</p>
+
+      <h2 id="c4-keys" data-short="Idempotency keys">Idempotency keys: the client names the payment</h2>
+      <p>The client invents a key, such as <code>rent-2026-11</code>, sends it as <code>Idempotency-Key</code>, and sends the <em>same</em> key on every retry. The server stores <code>(payer, key) → fingerprint, payment</code>:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Arrives</th><th>Server answers</th><th>Recorded</th></tr></thead>
+        <tbody>
+          <tr><td>New key</td><td>Does the work; stores key + payment</td><td><code>201</code>, <code>Idempotent-Replayed: false</code>, <code>COMPLETED</code></td></tr>
+          <tr><td>Same key, same payee, amount and currency</td><td>The original payment, unchanged</td><td><code>201</code>, <code>Idempotent-Replayed: true</code>, same <code>id</code></td></tr>
+          <tr><td>Same key, $4.00 instead of $3.00</td><td>Refuses; stores nothing</td><td><code>422</code>, <code>"Idempotency-Key was already used for a different request"</code></td></tr>
+          <tr><td>Same key, <em>different payer</em></td><td>A separate payment: keys are scoped to the payer</td><td>Tested in <code>keysAreScopedToThePayer</code></td></tr>
+          <tr><td>No key</td><td>Refuses</td><td><code>400</code>, <code>"Required header 'Idempotency-Key' is not present."</code></td></tr>
+          <tr><td>Same key, 25 hours later</td><td>A <b>new</b> payment: the key expired</td><td>Tested in <code>anExpiredKeyMayBeReusedForANewPayment</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>The last row is the <button class="term" data-term="retention-policy">retention policy</button>: a key means one payment for 24 hours, then may be reused. An hourly job deletes expired keys; payments are never deleted. Insufficient funds is a stored <code>REJECTED</code> payment with <code>201</code>, not an error. That keeps a key's answer stable: if Alice is refused, gets paid, and retries with the same key, she gets the same refusal. A new attempt needs a new key.</p>
+      <details class="reveal"><summary>Under the hood: what is actually inside the fingerprint?</summary><div>
+        <p><code>SHA-256("v1|" + payeeAccountId + "|" + amountMinor + "|" + currency)</code>, as 64 lowercase hex characters, stored in <code>request_fingerprint CHAR(64)</code>. It's built from the parsed Java values, so <code>{"amountMinor":300,"currency":"USD",…}</code> and the same fields in a different order, or with extra spaces, give the same fingerprint.</p>
+        <p>The payer isn't in it because the payer is already half of the primary key. The <code>v1</code> is a version: if a future chapter adds a field (a memo, say), it switches to <code>v2</code>, and old fingerprints can never accidentally equal new ones.</p>
+      </div></details>
+    </div>
+
+    <div class="prose">
+      <h2 id="c4-trace" data-short="Payment trace">Following a payment</h2>
+      <p>Step through the six scenarios. Watch for the three <code>Creating new transaction</code> lines in a new payment, and for how little a replay does.</p>
+    </div>
+
+    <div class="fig tracer">
+      <div class="fig-head"><h4>A payment, its retries, and its failures</h4><div class="chips" aria-label="Scenario"></div></div>
+      <div class="fig-body stage">
+        <ol class="lanes"></ol>
+        <div class="side">
+          <div><span class="label">Request</span><pre class="printout request"></pre></div>
+          <div><span class="label">Server log and SQL (recorded, abridged)</span><pre class="printout" aria-live="polite"></pre></div>
+          <div class="result" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="controls"><div class="row"><button class="btn" type="button">Play</button><button class="btn ghost" type="button">Step</button><button class="btn ghost" type="button">Reset</button></div><span class="progress"></span></div>
+      <script type="application/json">
+      {
+        "lanes": [
+          {"name": "Client", "detail": "curl / phone app"},
+          {"name": "PaymentController", "detail": "payment.api"},
+          {"name": "PaymentService", "detail": "not a transaction"},
+          {"name": "PaymentSteps", "detail": "3 × @Transactional"},
+          {"name": "LedgerService", "detail": "holds and entries"},
+          {"name": "PostgreSQL", "detail": "V4__payments.sql"}
+        ],
+        "scenarios": [
+          {"label": "New payment $3.00", "request": "POST /api/v1/payments\nX-Payer-Account-Id: …alice   (balance $10.00)\nIdempotency-Key: rent-2026-11\n\n{\"payeeAccountId\":\"…bob\",\"amountMinor\":300,\"currency\":\"USD\"}",
+           "steps": [
+             {"lane": 0, "text": "Alice's app asks to pay Bob $3.00, and names this payment rent-2026-11.",
+              "what": "The client sends an HTTP request with two headers: <b>who is paying</b> (<code>X-Payer-Account-Id</code>) and <b>a name for this one payment</b> that it made up itself (<code>Idempotency-Key</code>). The body says who gets paid and how much, in cents.",
+              "why": "The key is the client's promise: \"if you see this name again, it's the same payment, not a new one.\" Without it, the server can't tell a retry from a second payment.",
+              "deep": "Until Chapter 5, the payer header is taken on trust: anyone can claim to be any payer. It is a header, not a body field, so that Chapter 5 can replace it with the logged-in user without changing the body, and without changing the fingerprint."},
+             {"lane": 1, "text": "The controller checks the headers and body, builds a PaymentCommand, and calls pay().",
+              "what": "Spring checks the input against simple rules: the payer is a valid id, the key is 1–64 letters, digits or <code>. _ : -</code>, the amount is between 1 cent and $1,000,000, and the currency is USD. Then the controller packs it into a <code>PaymentCommand</code> and hands it on.",
+              "why": "Bad input is refused here, before any database work, and nothing is stored, so the key is still free for a corrected request.", "log": "[exec-6] DispatcherServlet : POST \"/api/v1/payments\", parameters={}",
+              "deep": "<code>@Pattern</code> on a <code>@RequestHeader</code> parameter uses Spring 6's built-in <b>method validation</b>: a failure raises <code>HandlerMethodValidationException</code>, which Spring Boot turns into a 400 problem response (<code>\"detail\":\"Validation failure\"</code>, recorded). A missing header raises <code>MissingRequestHeaderException</code> instead."},
+             {"lane": 3, "text": "Transaction 1 (accept) begins. It checks both accounts exist and neither is the funding account.",
+              "what": "<code>PaymentService</code> calls the first of three steps. Spring starts a database transaction for it. The step first looks up both accounts: they must exist, be different, and be ordinary customer accounts.",
+              "why": "The funding account is allowed to go negative. A payment from it would let anyone create money out of thin air through the public API.", "log": "[exec-6] JpaTransactionManager : Creating new transaction with name [...PaymentSteps.accept]\n[exec-6] SQL : SELECT currency, kind FROM account WHERE id = ?\n[exec-6] SQL : SELECT currency, kind FROM account WHERE id = ?",
+              "deep": "<code>PaymentService.pay</code> itself has <em>no</em> <code>@Transactional</code>. Each step is a method on a separate bean, <code>PaymentSteps</code>, so every call passes through Spring's <a href=\"hood.html#h-proxy\">transaction proxy</a>. A call from inside the same class (<code>this.accept()</code>) would skip the proxy, and the three steps would silently become one transaction, or none."},
+             {"lane": 5, "text": "Claim the key: INSERT … ON CONFLICT DO NOTHING inserts 1 row, so the key is ours.",
+              "what": "The server writes the key into the <code>idempotency_key</code> table, with a hash of the request (the <b>fingerprint</b>) and the id the payment will get. \"ON CONFLICT DO NOTHING\" means: if this payer already has this key, don't insert, just report 0 rows.",
+              "why": "Claiming the key <em>before</em> doing any work means two copies of the same request can't both do the work. Exactly one of them gets the 1.", "log": "[exec-6] SQL : DELETE FROM idempotency_key\n  WHERE payer_account_id = ? AND idempotency_key = ? AND expires_at <= ?\n[exec-6] SQL : INSERT INTO idempotency_key\n    (payer_account_id, idempotency_key, request_fingerprint, payment_id, created_at, expires_at)\n  VALUES (...)\n  ON CONFLICT (payer_account_id, idempotency_key) DO NOTHING",
+              "deep": "The <code>DELETE</code> first removes this one key if it expired (the 24-hour retention policy), so an old key can be reused.\n\nThe key row points at a payment row that doesn't exist yet. Its foreign key is <code>DEFERRABLE INITIALLY DEFERRED</code>, so PostgreSQL checks it at <code>COMMIT</code>, when the payment row is there too. Chapter 3 used the same trick for balanced entries."},
+             {"lane": 4, "text": "placeHold locks Alice's row, reads ledger and holds, sees $10.00 available, and inserts a $3.00 hold.",
+              "what": "The ledger reserves $3.00 of Alice's money. It locks her account row first (other payments from Alice now wait their turn), then works out what she can spend: her balance, minus money already held. $10.00 covers $3.00, so it writes the hold.",
+              "why": "Two payments that both read \"$10.00 available\" before either reserved anything could reserve $20.00 between them. The lock makes them take turns, exactly as debits do in Chapter 3.", "log": "[exec-6] SQL : SELECT currency, kind FROM account WHERE id = ? FOR NO KEY UPDATE\n[exec-6] SQL : SELECT COALESCE(SUM(amount_minor), 0) FROM posting WHERE account_id = ?\n[exec-6] SQL : SELECT COALESCE(SUM(amount_minor), 0) FROM ledger_hold\n  WHERE account_id = ? AND status = 'ACTIVE'\n[exec-6] SQL : INSERT INTO ledger_hold (id, account_id, amount_minor, currency, status, created_at)\n[exec-6] LedgerService : hold placed holdId=daa0dfec-… amountMinor=300",
+              "deep": "<code>placeHold</code> is <code>@Transactional</code> too, but with the default propagation, <code>REQUIRED</code>, it joins transaction 1 (<code>Participating in existing transaction</code> in the debug log) instead of starting its own.\n\nThat's why it <em>returns</em> <code>Optional.empty()</code> for insufficient funds instead of throwing: an exception leaving a joined proxy marks the shared transaction <button class=\"term\" data-term=\"rollback-only\">rollback-only</button>, and the stored rejection would be lost at commit."},
+             {"lane": 5, "text": "The payment row is inserted as ACCEPTED, and transaction 1 commits.",
+              "what": "The payment is saved with status <code>ACCEPTED</code> and a pointer to its hold. Committing makes the key, the hold and the payment all visible to everyone at once.",
+              "why": "From this moment, if the server crashes, the database still says \"this payment exists, its money is held, nothing moved yet\". A retry can pick it up from here.", "log": "[exec-6] PaymentSteps : payment ACCEPTED paymentId=400e41b5-… amountMinor=300\n[exec-6] SQL : insert into payment (amount_minor,created_at,currency,hold_id,journal_entry_id,\n  payee_account_id,payer_account_id,rejection_reason,status,updated_at,id) values (...)",
+              "deep": "The <code>insert into payment</code> line appears <em>after</em> the log message: <code>persist</code> only queues the row, and Hibernate sends it at <button class=\"term\" data-term=\"flush\">flush</button>, just before <code>COMMIT</code>. The deferred foreign key from the key row is then satisfied."},
+             {"lane": 3, "text": "Transaction 2 (startProcessing) locks the payment row and moves it to PROCESSING.",
+              "what": "A second, short transaction locks this one payment row and changes its status to <code>PROCESSING</code>: \"we've started moving the money\". Then it commits.",
+              "why": "Today this changes nothing about the money. In Chapter 7 the call to a bank goes right after this step, and a crash there must leave behind \"we may have asked the bank\", not \"we never started\".", "log": "[exec-6] JpaTransactionManager : Creating new transaction with name [...PaymentSteps.startProcessing]\n[exec-6] SQL : SELECT * FROM payment WHERE id = ? FOR UPDATE\n[exec-6] PaymentSteps : payment PROCESSING paymentId=400e41b5-…\n[exec-6] SQL : update payment set journal_entry_id=?,rejection_reason=?,status=?,updated_at=? where id=?",
+              "deep": "<code>SELECT … FOR UPDATE</code> on the payment row makes a concurrent retry of the same payment wait here until this transaction commits. It then reads the row again and finds it already <code>PROCESSING</code>, so it does nothing.\n\nThe <code>update</code> is Hibernate's <b>dirty checking</b>: the repository copied the new state onto the loaded entity, and Hibernate compared it with the snapshot it took at load time."},
+             {"lane": 4, "text": "Transaction 3 (complete): lock the payment, capture the hold, post the PAYMENT entry.",
+              "what": "The final transaction locks the payment again, marks the hold as <b>captured</b>, and posts the journal entry that actually moves $3.00 from Alice to Bob, through the same code path as every Chapter 3 transfer.",
+              "why": "Marking the hold captured and posting the entry happen in one transaction, so the money is either still held or fully moved, never both and never neither.", "log": "[exec-6] JpaTransactionManager : Creating new transaction with name [...PaymentSteps.complete]\n[exec-6] SQL : SELECT * FROM payment WHERE id = ? FOR UPDATE\n[exec-6] SQL : SELECT account_id, amount_minor, currency, created_at FROM ledger_hold\n  WHERE id = ? AND status = 'ACTIVE' FOR UPDATE\n[exec-6] SQL : UPDATE ledger_hold SET status = 'CAPTURED', journal_entry_id = ?, closed_at = ? WHERE id = ?\n[exec-6] SQL : SELECT currency, kind FROM account WHERE id = ? FOR NO KEY UPDATE\n[exec-6] SQL : SELECT COALESCE(SUM(amount_minor), 0) FROM ledger_hold WHERE ... AND status = 'ACTIVE'\n[exec-6] LedgerService : journal entry posted entryId=2afac93c-… kind=PAYMENT postings=2",
+              "deep": "Order matters. The hold is marked <code>CAPTURED</code> <em>before</em> the debit check runs. The check subtracts active holds from the balance; if this payment's own hold were still active, it would be counted against itself, and a payment that held all of Alice's $10.00 could never complete.\n\nThe hold's foreign key to <code>journal_entry</code> is deferred, because the entry's rows are only flushed later, at commit."},
+             {"lane": 5, "text": "Entry, two postings and COMPLETED status are flushed, and transaction 3 commits.",
+              "what": "The database receives the journal entry, Alice's −300 and Bob's +300, and the payment's new status, and saves them together.",
+              "why": "Chapter 3's database rules still apply: the entry must sum to zero at commit, and postings can never be edited afterwards.", "log": "[exec-6] PaymentSteps : payment COMPLETED paymentId=400e41b5-… entryId=2afac93c-…\n[exec-6] SQL : insert into journal_entry (created_at,kind,id) values (?,?,?)\n[exec-6] SQL : insert into posting (...) values (...)\n[exec-6] SQL : insert into posting (...) values (...)\n[exec-6] SQL : update payment set journal_entry_id=?,rejection_reason=?,status=?,updated_at=? where id=?",
+              "deep": "V4's <code>CHECK ((status = 'COMPLETED') = (journal_entry_id IS NOT NULL))</code> is checked on that final <code>update</code>: a <code>COMPLETED</code> payment without an entry, or an entry on an unfinished payment, is impossible even for a buggy writer."},
+             {"lane": 0, "text": "201 Created, Idempotent-Replayed: false, status COMPLETED.",
+              "what": "The client gets the payment back: its id, <code>\"status\":\"COMPLETED\"</code>, the hold and the journal entry it produced. Alice's balance is now <code>ledgerMinor 700</code>, <code>availableMinor 700</code>.",
+              "why": "201 means \"this payment is final; read its status\". The header tells the client this was the first time.", "log": "[exec-6] DispatcherServlet : Completed 201 CREATED",
+              "deep": "<code>Location: /api/v1/payments/400e41b5-…</code> lets the client look the payment up later with <code>GET</code>. There's no ownership check on that GET yet: anyone who knows the id can read it. Chapter 5 adds one."}
+           ],
+           "result": {"ok": true, "status": "201 Created", "summary": "Three committed steps: ACCEPTED, PROCESSING, COMPLETED. The money moved once."}},
+
+          {"label": "Same request again", "request": "POST /api/v1/payments\nX-Payer-Account-Id: …alice\nIdempotency-Key: rent-2026-11      (same key)\n\n{\"payeeAccountId\":\"…bob\",\"amountMinor\":300,\"currency\":\"USD\"}   (same body)",
+           "steps": [
+             {"lane": 0, "text": "The client sends the identical request, as a retry would.",
+              "what": "Exactly the same headers and body as before. Maybe the app never saw the first answer.",
+              "why": "This is the case the whole chapter is for: it must not pay Bob a second $3.00.",
+              "deep": "A real client retries after a timeout or a connection error, usually with exponential backoff (wait 1 s, 2 s, 4 s…). Here we just send it again."},
+             {"lane": 5, "text": "The claim inserts 0 rows: the key is taken. The stored fingerprint is read.",
+              "what": "The same <code>INSERT … ON CONFLICT DO NOTHING</code> runs, but this payer already has this key, so 0 rows are inserted. The server reads the stored row: the fingerprint, and which payment the key belongs to.",
+              "why": "0 rows is the database saying \"someone already owns this key\". That decision is made by the primary key, not by Java, so it holds even if two requests arrive at the same instant.", "log": "[exec-7] JpaTransactionManager : Creating new transaction with name [...PaymentSteps.accept]\n[exec-7] SQL : INSERT INTO idempotency_key (...) VALUES (...)\n  ON CONFLICT (payer_account_id, idempotency_key) DO NOTHING\n[exec-7] SQL : SELECT request_fingerprint, payment_id FROM idempotency_key\n  WHERE payer_account_id = ? AND idempotency_key = ?",
+              "deep": "The primary key of <code>idempotency_key</code> is <code>(payer_account_id, idempotency_key)</code>. A unique index backs it; <code>ON CONFLICT</code> consults that index."},
+             {"lane": 3, "text": "Fingerprints match, so the original payment is returned. No lock, no hold, no entry.",
+              "what": "The hash of this request equals the stored hash, so it's the same payment. The server loads the original payment and returns it as it is.",
+              "why": "The replay does no money work at all. Compare the log with the first request's: no account lock, no hold, no journal entry.", "log": "[exec-7] PaymentSteps : payment replayed paymentId=400e41b5-… status=COMPLETED",
+              "deep": "If the stored payment weren't final (<code>ACCEPTED</code> or <code>PROCESSING</code>), <code>PaymentService.pay</code> would now run steps 2 and 3 for it. That's how a retry repairs a payment interrupted by a crash; see the <b>Client times out</b> scenario."},
+             {"lane": 0, "text": "201 Created, Idempotent-Replayed: true, the same id and body.",
+              "what": "The client gets exactly what the first request returned, plus <code>Idempotent-Replayed: true</code>. Alice still has $7.00.",
+              "why": "The client can't tell, and doesn't need to tell, whether its first attempt succeeded. Either way it now has the answer.", "log": "[exec-7] DispatcherServlet : Completed 201 CREATED",
+              "deep": "The body is rebuilt from the <code>payment</code> row, not replayed from a saved copy of the old response. ADR 0009 explains the choice: one source of truth, and a replay of an unfinished payment shows its <em>current</em> state."}
+           ],
+           "result": {"ok": true, "status": "201 Created (replayed)", "summary": "Same key, same request: the original payment, and no second $3.00."}},
+
+          {"label": "Same key, $4.00", "request": "POST /api/v1/payments\nX-Payer-Account-Id: …alice\nIdempotency-Key: rent-2026-11      (same key)\n\n{\"payeeAccountId\":\"…bob\",\"amountMinor\":400,\"currency\":\"USD\"}   (different amount)",
+           "steps": [
+             {"lane": 0, "text": "A buggy client reuses the key for a different amount.",
+              "what": "Same key, but the body now says $4.00.",
+              "why": "If the server treated this as a replay, the client would think it paid $4.00 when it paid $3.00. If it treated it as new, the key would stop meaning anything.",
+              "deep": "Real causes: a client that uses a constant key, or a user who edits the amount and presses \"retry\"."},
+             {"lane": 3, "text": "The key is taken, and the stored fingerprint doesn't match.",
+              "what": "The claim finds the key already used. The hash of \"Bob, 400, USD\" isn't the stored hash of \"Bob, 300, USD\".",
+              "why": "The fingerprint is what turns \"key seen before\" into \"key seen before <em>for this exact request</em>\".", "log": "[exec-8] SQL : INSERT INTO idempotency_key ... ON CONFLICT ... DO NOTHING\n[exec-8] SQL : SELECT request_fingerprint, payment_id FROM idempotency_key ...",
+              "deep": "Comparing 64-character hashes is cheap and fixed-size, however large requests become. It also means the table never stores the request body itself."},
+             {"lane": 5, "fail": true, "text": "IdempotencyKeyReusedException: the transaction rolls back. Nothing is stored.",
+              "what": "The step throws an exception, so Spring rolls back transaction 1. Nothing new was written anyway.",
+              "why": "The original payment and its key are untouched: <code>rent-2026-11</code> still means \"$3.00 to Bob\".", "log": "[exec-8] JpaTransactionManager : Initiating transaction rollback\n[exec-8] ExceptionHandlerExceptionResolver : Resolved [...IdempotencyKeyReusedException:\n  idempotency key was already used with a different request]",
+              "deep": "<code>PaymentExceptionHandler</code> maps the exception to a <a href=\"ch-02.html\">problem detail</a>. Like every handler in this project, its <code>detail</code> never echoes caller input, so a malicious key can't be reflected back into logs or pages."},
+             {"lane": 0, "text": "422 Unprocessable Content.",
+              "what": "<code>\"detail\":\"Idempotency-Key was already used for a different request\"</code>.",
+              "why": "422 says \"well-formed, but I won't do this\". Retrying won't help; the client needs a new key for a new payment.", "log": "[exec-8] DispatcherServlet : Completed 422 UNPROCESSABLE_ENTITY",
+              "deep": "Some APIs use 409 here. 422 was chosen so that 409 stays free to mean \"conflicts with the current state of a resource\" if later chapters need it."}
+           ],
+           "result": {"ok": false, "status": "422 Unprocessable Content", "summary": "One key, one meaning. A different request with the same key is refused."}},
+
+          {"label": "Not enough money", "request": "POST /api/v1/payments\nX-Payer-Account-Id: …alice   (balance $7.00)\nIdempotency-Key: big-one\n\n{\"payeeAccountId\":\"…bob\",\"amountMinor\":5000,\"currency\":\"USD\"}",
+           "steps": [
+             {"lane": 0, "text": "Alice tries to pay $50.00 with $7.00.",
+              "what": "A new key, and an amount Alice doesn't have.",
+              "why": "In Chapter 3 this was a 409 with nothing stored. Now that requests can be retried, the refusal itself must be remembered.",
+              "deep": "Imagine it weren't stored: Alice is refused, receives $100, and her app retries the old request. It would now succeed. The same key would have meant two different outcomes."},
+             {"lane": 5, "text": "The key is claimed (1 row), as for any new payment.",
+              "what": "This payer has never used <code>big-one</code>, so the key is now theirs.",
+              "why": "The refusal will be tied to this key, so every retry gets the same refusal.", "log": "[exec-9] SQL : INSERT INTO idempotency_key ... ON CONFLICT ... DO NOTHING"},
+             {"lane": 4, "text": "placeHold locks Alice, reads $7.00 available, and returns empty: no hold.",
+              "what": "The ledger locks Alice's account, works out her available money ($7.00), sees that $50.00 doesn't fit, and reports \"no\" without writing anything.",
+              "why": "\"Not enough money\" is a normal outcome, not a crash, so it's a return value rather than an exception.", "log": "[exec-9] TransactionInterceptor : Getting transaction for [...LedgerService.placeHold]\n[exec-9] SQL : SELECT currency, kind FROM account WHERE id = ? FOR NO KEY UPDATE\n[exec-9] SQL : SELECT COALESCE(SUM(amount_minor), 0) FROM posting WHERE account_id = ?\n[exec-9] SQL : SELECT COALESCE(SUM(amount_minor), 0) FROM ledger_hold WHERE ... AND status = 'ACTIVE'\n[exec-9] TransactionInterceptor : Completing transaction for [...LedgerService.placeHold]",
+              "deep": "The two <code>TransactionInterceptor</code> lines are the proxy around <code>placeHold</code>, which joined transaction 1. Had <code>placeHold</code> thrown, the interceptor would have called <code>setRollbackOnly()</code> on the shared transaction here. Exercise 5 lets you watch that happen."},
+             {"lane": 5, "text": "A REJECTED payment is inserted, and transaction 1 commits.",
+              "what": "The payment is stored with status <code>REJECTED</code>, reason <code>INSUFFICIENT_FUNDS</code>, and no hold. Steps 2 and 3 are skipped: the payment is already final.",
+              "why": "The answer is now permanent for this key. Nothing was held, so Alice's available balance is unchanged.", "log": "[exec-9] PaymentSteps : payment REJECTED paymentId=4d09a606-… amountMinor=5000\n[exec-9] JpaTransactionManager : Committing JPA transaction on EntityManager [...]\n[exec-9] SQL : insert into payment (...) values (...)",
+              "deep": "<code>CHECK ((status = 'REJECTED') = (rejection_reason IS NOT NULL))</code> and <code>CHECK (status = 'REJECTED' OR hold_id IS NOT NULL)</code>: a rejection must say why, and only a rejection may lack a hold."},
+             {"lane": 0, "fail": true, "text": "201 Created, status REJECTED, rejectionReason INSUFFICIENT_FUNDS.",
+              "what": "The client gets a payment record that says it was refused, and why.",
+              "why": "201 because a payment record was created and is final; the body's <code>status</code> says how it ended. Many clients treat any non-2xx code as \"nothing happened, try again\", which is exactly wrong here.", "log": "[exec-9] DispatcherServlet : Completed 201 CREATED",
+              "deep": "Tested in <code>aReplayedRejectionStaysRejectedEvenAfterThePayerIsFunded</code>: refuse, fund, retry with the same key, still <code>REJECTED</code>; then a new key succeeds."}
+           ],
+           "result": {"ok": false, "status": "201 Created (REJECTED)", "summary": "Refused, recorded, and stable: retrying this key gives the same answer."}},
+
+          {"label": "Client times out", "request": "POST /api/v1/payments   (client gives up after 2 s)\nX-Payer-Account-Id: …alice   (balance $10.00)\nIdempotency-Key: rent-2026-11\n\n{\"payeeAccountId\":\"…bob\",\"amountMinor\":300,\"currency\":\"USD\"}\n\n(meanwhile psql holds Alice's row lock for 4 s)",
+           "steps": [
+             {"lane": 5, "text": "To force a slow request, psql holds Alice's account row lock for 4 s.",
+              "what": "In a separate database session we lock Alice's row and wait 4 seconds before committing, to play the part of a slow, busy system.",
+              "why": "We need the server to be slower than the client's patience, reliably, so we can watch what happens.", "log": "psql: BEGIN; SELECT id FROM account WHERE id = '…alice' FOR NO KEY UPDATE; SELECT pg_sleep(4); COMMIT;",
+              "deep": "Run against the running service with <code>infra/compose.debug.yaml</code> and the lab overlay. The same thing happens in production when a hot account's lock queue is long, or a database failover pauses commits."},
+             {"lane": 4, "text": "The payment claims its key, then waits at Alice's lock.",
+              "what": "The request gets as far as reserving the money, and stops: it needs Alice's row lock, which psql holds.",
+              "why": "Waiting is correct. It's the same queue that keeps two debits of Alice from overlapping.", "log": "23:41:05.476 [exec-7] SQL : SELECT currency, kind FROM account WHERE id = ? FOR NO KEY UPDATE   ← waits",
+              "deep": "While it waits, the request holds one of the 10 HikariCP connections and one Tomcat thread. A balance read during the wait was <em>not</em> blocked (<code>ledgerMinor 1000, availableMinor 1000</code>): in PostgreSQL, plain reads never wait for row locks, thanks to <button class=\"term\" data-term=\"mvcc\">MVCC</button>."},
+             {"lane": 0, "fail": true, "text": "After 2017 ms the client gives up: TimeoutError. It doesn't know what happened.",
+              "what": "The client stops waiting. From its side, the payment might or might not have happened.",
+              "why": "This is the moment an unsafe client either pays twice (retry without a key) or leaves the user unsure (no retry).", "log": "client: pay client gave up: TimeoutError 2017 ms",
+              "deep": "Giving up closes the client's side of the connection. Tomcat notices only when it tries to write the response; the server-side request carries on regardless."},
+             {"lane": 3, "text": "psql commits. The server finishes the payment anyway: ACCEPTED, PROCESSING, COMPLETED.",
+              "what": "As soon as the lock is free, the original request carries on and completes the payment, 2.6 s after it started waiting. Its \"201\" answer goes to a client that has already left.",
+              "why": "The server can't know the client gave up, and must not undo a valid payment because of it. Alice's balance is now $7.00.", "log": "23:41:08.111 [exec-7] LedgerService : hold placed holdId=02ab1aac-… amountMinor=300\n23:41:08.111 [exec-7] PaymentSteps : payment ACCEPTED paymentId=750501fd-…\n23:41:08.120 [exec-7] PaymentSteps : payment PROCESSING paymentId=750501fd-…\n23:41:08.135 [exec-7] PaymentSteps : payment COMPLETED paymentId=750501fd-…\n23:41:08.144 [exec-7] DispatcherServlet : Completed 201 CREATED      ← nobody listening",
+              "deep": "Notice the thread: <code>exec-7</code>, the same one that started waiting at 05.476. A request belongs to its thread from start to finish, whatever the client does."},
+             {"lane": 0, "text": "The client retries with the same key, and gets the payment: 201, replayed, 48 ms.",
+              "what": "The app sends the identical request again. This time the answer comes straight back: the payment that the first attempt created, marked as a replay.",
+              "why": "The retry turned \"I don't know\" into \"it's done, here it is\", without moving another cent.", "log": "23:41:08.839 [exec-3] PaymentSteps : payment replayed paymentId=750501fd-… status=COMPLETED\n23:41:08.840 [exec-3] DispatcherServlet : Completed 201 CREATED\nclient: retry 201 Idempotent-Replayed: true {\"id\":\"750501fd-…\",\"status\":\"COMPLETED\",…} 48 ms",
+              "deep": "If the retry had arrived <em>while</em> the first request was still waiting, its claim <code>INSERT</code> would have waited on the primary key until the first request's transaction 1 committed, then replayed. That's the next scenario."}
+           ],
+           "result": {"ok": true, "status": "201 Created (replayed)", "summary": "The first answer was lost; the retry got it. Alice paid $3.00 once ($10.00 → $7.00)."}},
+
+          {"label": "20 retries at once", "request": "20 × PaymentService.pay(alice, \"double-click\", bob, $3.00)\nall released at the same instant\n(PaymentConcurrencyIntegrationTest)",
+           "steps": [
+             {"lane": 0, "text": "Twenty identical requests start at the same moment.",
+              "what": "The test starts 20 threads and releases them together, all with the key <code>double-click</code>, like a user hammering a button while the network stutters.",
+              "why": "A check written in Java (\"is the key there? no? then insert\") would let several through at once. Only the database can decide this safely.",
+              "deep": "The threads wait on a <code>CountDownLatch</code> and are released by one <code>countDown()</code>, the same technique as Chapter 3's race tests."},
+             {"lane": 5, "text": "One INSERT gets 1 row. The other 19 wait on the primary key.",
+              "what": "All 20 try to insert the key. The first gets in. The other 19 can't tell yet whether the first will commit, so PostgreSQL makes each of them wait.",
+              "why": "Waiting is the safe answer: if the first one failed, one of the others must be able to take the key over.",
+              "deep": "An uncommitted row in a unique index is invisible to other transactions, but it still blocks a conflicting insert. PostgreSQL waits on the inserting transaction's id, just like a row lock, until it commits (the waiter's <code>ON CONFLICT</code> then finds a conflict: 0 rows) or rolls back (the waiter inserts: 1 row)."},
+             {"lane": 4, "text": "The winner holds $3.00 and commits ACCEPTED.",
+              "what": "The one request that owns the key reserves the money and saves the payment.",
+              "why": "Its commit is what releases the 19 waiting requests.", "log": "[thread-20] LedgerService : hold placed holdId=83d91b3e-… amountMinor=300"},
+             {"lane": 3, "text": "The 19 wake up, find the same fingerprint, and replay the winner's payment.",
+              "what": "Each waiting request now gets 0 rows, reads the stored key, sees its fingerprint matches, and returns the winner's payment. They then try steps 2 and 3, which lock the payment row, take turns, and find there's nothing left to do.",
+              "why": "Every caller ends up with the same, completed payment.", "log": "[thread-10] PaymentSteps : payment replayed paymentId=56a59553-… status=ACCEPTED\n[thread-8]  PaymentSteps : payment replayed paymentId=56a59553-… status=ACCEPTED\n[thread-4]  PaymentSteps : payment replayed paymentId=56a59553-… status=ACCEPTED\n  … (16 more)",
+              "deep": "They replay it as <code>ACCEPTED</code>, because that's what was committed when they woke. The <code>SELECT … FOR UPDATE</code> on the payment row in steps 2 and 3 serializes them with the winner; each then sees <code>PROCESSING</code> or <code>COMPLETED</code> and returns without acting."},
+             {"lane": 0, "text": "Result: one payment, 1 fresh and 19 replayed, Alice $10.00 → $7.00.",
+              "what": "All 20 callers get the same payment id and status <code>COMPLETED</code>. One journal entry was posted.",
+              "why": "Twenty requests, one payment: that is what idempotency means under concurrency.", "log": "20 simultaneous requests with one key: payments=1 fresh=1 replayed=19 alice=700",
+              "deep": "Mutation run while writing this chapter: replace <code>ON CONFLICT DO NOTHING</code> with \"look up, then insert\". The primary key still prevents a second payment, but the losers fail with <code>duplicate key value violates unique constraint \"idempotency_key_pkey\"</code> instead of getting their answer. <code>race.mjs --same-key</code> shows the same with 100 HTTP requests: <code>COMPLETED × 100; 1 distinct, 99 replays</code>."}
+           ],
+           "result": {"ok": true, "status": "1 payment", "summary": "The primary key decides who owns the key; everyone else waits, then replays."}}
+        ]
+      }
+      </script>
+    </div>
+
+    <div class="prose">
+      <h2 id="c4-tour" data-short="Code tour">Code tour</h2>
+      <p>Seven excerpts, in the order a request meets them. Click a numbered note to highlight its lines.</p>
+    </div>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/payment/application/PaymentService.java">
+      <div class="fig-head"><h4>1 · Three steps, each committed</h4><span class="path">payment/application/PaymentService.java</span></div>
+<pre class="src">
+public PaymentOutcome pay(PaymentCommand command) {
+    PaymentSteps.Acceptance acceptance = steps.accept(command);
+    Payment payment = acceptance.payment();
+    // A replay of an unfinished payment resumes it: this is how a crash between steps gets repaired.
+    if (!payment.status().isFinal()) {
+        try {
+            payment = steps.startProcessing(payment.id());
+            payment = steps.complete(payment.id());
+        } catch (RuntimeException e) {
+            // The last committed state stands. The caller sees it (202) and retries with the same key.
+            log.warn("payment not finished paymentId={} status={}; a retry with the same Idempotency-Key resumes it",
+                payment.id(), payment.status(), e);
+        }
+    }
+    return new PaymentOutcome(payment, acceptance.replayed());
+}
+</pre>
+      <ol class="notes">
+        <li data-at="steps.accept(command)"><span class="reads">"Do step 1: claim the key and hold the money, or find the payment this key already belongs to."</span><code>steps</code> is a different bean, so this call goes through Spring's transaction proxy and gets its own transaction. <code>pay</code> itself has no <code>@Transactional</code>, on purpose.</li>
+        <li data-at="if (!payment.status().isFinal())"><span class="reads">"If the payment isn't finished yet, which is true for a new payment and for a replay of an interrupted one, carry on."</span>This one line is the crash recovery. A retry of a payment left <code>ACCEPTED</code> or <code>PROCESSING</code> reaches here with the old payment and finishes it.</li>
+        <li data-at="steps.startProcessing" data-span="2"><span class="reads">"Do step 2, then step 3, each as its own transaction, keeping whatever each one returns."</span>Each returned value is the committed state, so if step 3 throws, <code>payment</code> still holds step 2's result.</li>
+        <li data-at="catch (RuntimeException e)"><span class="reads">"If either step fails, don't fail the request: log a warning and fall through with what was saved."</span>The client gets 202 and the last committed state, which is true, and retries with the same key. Catching every <code>RuntimeException</code> also hides bugs, which is why it logs a warning with the stack trace.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/payment/application/PaymentSteps.java">
+      <div class="fig-head"><h4>2 · Step 1: claim the key, then hold the money</h4><span class="path">payment/application/PaymentSteps.java</span></div>
+<pre class="src">
+@Transactional
+public Acceptance accept(PaymentCommand command) {
+    UUID payer = command.payerId();
+    UUID payee = command.payeeId();
+    checkParties(payer, payee);
+
+    Instant now = clock.instant();
+    String fingerprint = RequestFingerprint.of(payee, command.amount());
+    keys.deleteIfExpired(payer, command.idempotencyKey(), now);
+    UUID paymentId = UUID.randomUUID();
+    if (!keys.claim(payer, command.idempotencyKey(), fingerprint, paymentId, now, now.plus(keyRetention))) {
+        return replay(payer, command.idempotencyKey(), fingerprint);
+    }
+
+    Payment payment = ledger.placeHold(payer, command.amount())
+        .map(hold -&gt; Payment.accepted(paymentId, payer, payee, command.amount(), hold.id(), clock))
+        .orElseGet(() -&gt; Payment.rejected(paymentId, payer, payee, command.amount(), RejectionReason.INSUFFICIENT_FUNDS, clock));
+    payments.add(payment);
+    log.info("payment {} paymentId={} amountMinor={}", payment.status(), payment.id(), payment.amount().amountMinor());
+    return new Acceptance(payment, false);
+}
+</pre>
+      <ol class="notes">
+        <li data-at="checkParties"><span class="reads">"Make sure payer and payee are two different, existing customer accounts."</span>Done before the claim, so an invalid request never uses up its key: it rolls back, and the corrected request can reuse the same key.</li>
+        <li data-at="RequestFingerprint.of"><span class="reads">"Summarize what this request asks for as a 64-character hash."</span>Payee, amount and currency. Not the payer: the payer is already part of the key's scope.</li>
+        <li data-at="deleteIfExpired"><span class="reads">"If this key was used more than 24 hours ago, forget it."</span>Retention policy, part 1. The hourly purger is only housekeeping; this line is what makes an old key reusable.</li>
+        <li data-at="if (!keys.claim" data-span="3"><span class="reads">"Try to take the key. If someone already has it, stop here and return their payment instead."</span><code>claim</code> returns false when the key exists. <code>replay</code> then compares fingerprints and throws <code>IdempotencyKeyReusedException</code> (422) if they differ.</li>
+        <li data-at="ledger.placeHold" data-span="3"><span class="reads">"Ask the ledger to reserve the money. If it did, make an ACCEPTED payment pointing at the hold; if it couldn't (an empty <code>Optional</code>), make a REJECTED one."</span><code>.map</code> runs only when the <code>Optional</code> has a value; <code>.orElseGet</code> runs only when it's empty. No exception is involved, so the transaction stays committable.</li>
+        <li data-at="payments.add(payment)"><span class="reads">"Save the payment."</span>Queued now, sent at commit. Either way it commits with the key: a key never exists without its payment, or a payment without its key.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/payment/persistence/SqlIdempotencyKeyRepository.java">
+      <div class="fig-head"><h4>3 · The database decides who owns a key</h4><span class="path">payment/persistence/SqlIdempotencyKeyRepository.java</span></div>
+<pre class="src">
+// ON CONFLICT DO NOTHING: if another transaction has inserted this (payer, key) but not committed yet,
+// PostgreSQL makes this INSERT wait on the primary key until it does. Then: 0 rows if it committed
+// (the key is taken), 1 row if it rolled back (the key is ours).
+int inserted = entityManager.createNativeQuery("""
+        INSERT INTO idempotency_key
+            (payer_account_id, idempotency_key, request_fingerprint, payment_id, created_at, expires_at)
+        VALUES (:payer, :key, :fingerprint, :payment, :createdAt, :expiresAt)
+        ON CONFLICT (payer_account_id, idempotency_key) DO NOTHING""")
+</pre>
+      <ol class="notes">
+        <li data-at="ON CONFLICT DO NOTHING: if another" data-span="3"><span class="reads">The comment says it all: one SQL statement both checks and claims, so there's no gap between the two for another request to slip through.</span>This is the idempotency version of Chapter 3's lesson: never check in one step and act in another, unless something stops the world changing in between. Here the unique index does.</li>
+        <li data-at="INSERT INTO idempotency_key"><span class="reads">"Write the key, the fingerprint, and the id of the payment we're about to create."</span><code>"""…"""</code> is a Java <b>text block</b>: a multi-line string. <code>:payer</code> and the others are named parameters, filled in safely by JDBC, never pasted into the SQL.</li>
+        <li data-at="ON CONFLICT (payer_account_id, idempotency_key) DO NOTHING"><span class="reads">"If this payer already has this key, insert nothing and don't raise an error."</span>The caller learns which happened from the row count. Without this clause, the second insert would fail with a duplicate-key error, as the mutation in the tracer showed.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/ledger/application/LedgerService.java">
+      <div class="fig-head"><h4>4 · A hold takes the debit lock</h4><span class="path">ledger/application/LedgerService.java</span></div>
+<pre class="src">
+@Transactional
+public Optional&lt;Hold&gt; placeHold(UUID accountId, Money amount) {
+    // The same lock as a debit: a hold spends available money, so it races exactly like a debit (ADR 0006).
+    LedgerAccount account = ledger.lockForDebit(accountId).orElseThrow(() -&gt; new UnknownLedgerAccountException(accountId));
+    if (!account.canSpend(available(account), amount)) {
+        return Optional.empty();
+    }
+    Hold hold = Hold.place(accountId, amount, clock);
+    ledger.addHold(hold);
+    log.info("hold placed holdId={} amountMinor={}", hold.id(), amount.amountMinor());
+    return Optional.of(hold);
+}
+</pre>
+      <ol class="notes">
+        <li data-at="Optional&lt;Hold&gt;"><span class="reads">"Returns either a hold or nothing." <code>Optional&lt;Hold&gt;</code> is a box that may be empty.</span>The return type itself says "this can be refused". A caller can't forget the refusal case the way it can forget to catch an exception.</li>
+        <li data-at="lockForDebit"><span class="reads">"Lock the account's row so other debits and holds of it wait, and fail with 'unknown account' if it doesn't exist."</span>Chapter 3's <code>SELECT … FOR NO KEY UPDATE</code>. Remove it and <code>aWaitingHoldReadsTheHoldCommittedWhileItWaited</code> fails: T2 no longer waits.</li>
+        <li data-at="account.canSpend(available(account), amount)"><span class="reads">"Work out what the account can spend (balance minus active holds), <em>after</em> taking the lock, and check this amount fits."</span>The read must come after the lock, or it can be stale, exactly as in Chapter 3.</li>
+        <li data-at="return Optional.empty();"><span class="reads">"If it doesn't fit, say no, without throwing."</span>Throwing here would mark the caller's transaction <button class="term" data-term="rollback-only">rollback-only</button>, and the <code>REJECTED</code> payment couldn't be saved. Exercise 5 shows the error you'd get.</li>
+        <li data-at="ledger.addHold(hold)"><span class="reads">"Write the hold."</span>A native <code>INSERT</code>, sent immediately rather than at flush, so the payment row inserted later in the same transaction can reference it.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/payment/application/PaymentSteps.java">
+      <div class="fig-head"><h4>5 · Step 3: capture and complete, together</h4><span class="path">payment/application/PaymentSteps.java</span></div>
+<pre class="src">
+@Transactional
+public Payment complete(UUID paymentId) {
+    // The row lock makes a concurrent retry wait here, then see COMPLETED and do nothing.
+    Payment payment = lock(paymentId);
+    if (payment.status() != PaymentStatus.PROCESSING) {
+        return payment;
+    }
+    JournalEntry entry = ledger.captureHold(payment.holdId(), payment.payeeId());
+    Payment completed = payment.complete(entry.id(), clock);
+    payments.update(completed);
+    log.info("payment COMPLETED paymentId={} entryId={}", paymentId, entry.id());
+    return completed;
+}
+</pre>
+      <ol class="notes">
+        <li data-at="lock(paymentId)"><span class="reads">"Load the payment and lock its row until this transaction ends."</span><code>SELECT * FROM payment WHERE id = ? FOR UPDATE</code>. Two retries finishing the same payment take turns here.</li>
+        <li data-at="if (payment.status() != PaymentStatus.PROCESSING)" data-span="3"><span class="reads">"If someone else already finished it (or it was never started), there's nothing to do: return it as it is."</span>This is what makes step 3 itself safe to repeat: the second caller, after waiting for the lock, finds <code>COMPLETED</code>.</li>
+        <li data-at="ledger.captureHold"><span class="reads">"Turn the hold into a real journal entry that moves the money to the payee."</span>Marks the hold <code>CAPTURED</code>, then posts the entry through Chapter 3's <code>post</code>: lock, check available, append.</li>
+        <li data-at="payment.complete(entry.id(), clock)" data-span="2"><span class="reads">"Make the COMPLETED version of the payment, pointing at the entry, and save it."</span>Same transaction as the capture. That's why <code>PROCESSING</code> never means "maybe moved" internally, and why <code>INDETERMINATE</code> has no use until a bank is involved.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/payment/domain/PaymentStatus.java">
+      <div class="fig-head"><h4>6 · The allowed moves</h4><span class="path">payment/domain/PaymentStatus.java</span></div>
+<pre class="src">
+public boolean canMoveTo(PaymentStatus next) {
+    return switch (this) {
+        case ACCEPTED -&gt; next == PROCESSING;
+        case PROCESSING -&gt; Set.of(COMPLETED, REJECTED, INDETERMINATE).contains(next);
+        case INDETERMINATE -&gt; next == COMPLETED || next == REJECTED;
+        case COMPLETED, REJECTED -&gt; false;
+    };
+}
+</pre>
+      <ol class="notes">
+        <li data-at="return switch (this)"><span class="reads">"Depending on which state we're in, say whether <code>next</code> is allowed." <code>switch</code> with <code>-&gt;</code> is a Java <b>switch expression</b>: each case produces a value.</span>Java checks that every state has a case. Add a sixth state and this won't compile until you decide its moves.</li>
+        <li data-at="case PROCESSING"><span class="reads">"From PROCESSING, a payment may complete, be rejected, or become indeterminate."</span>The last two are for Chapter 7: a bank says no, or doesn't answer.</li>
+        <li data-at="case INDETERMINATE"><span class="reads">"From INDETERMINATE, only to a final state."</span>Notably <em>not</em> back to <code>PROCESSING</code>: an unknown outcome is resolved by finding out (reconciliation), never by trying again.</li>
+        <li data-at="case COMPLETED, REJECTED -&gt; false;"><span class="reads">"Finished payments go nowhere."</span>Unit-tested for every possible target state in <code>finalStatesGoNowhere</code>.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="sql" data-source="apps/payment-api/src/main/resources/db/migration/V4__payments.sql">
+      <div class="fig-head"><h4>7 · The database checks the states too</h4><span class="path">db/migration/V4__payments.sql</span></div>
+<pre class="src">
+CHECK (payer_account_id &lt;&gt; payee_account_id),
+-- Each state carries exactly the facts that state implies.
+CHECK ((status = 'REJECTED') = (rejection_reason IS NOT NULL)),
+CHECK ((status = 'COMPLETED') = (journal_entry_id IS NOT NULL)),
+CHECK (status = 'REJECTED' OR hold_id IS NOT NULL)
+</pre>
+      <ol class="notes">
+        <li data-at="payer_account_id &lt;&gt; payee_account_id"><span class="reads">"Nobody pays themselves." <code>&lt;&gt;</code> is SQL for "not equal".</span>Also checked in Java, before any work. The database copy holds even for a script that bypasses Java.</li>
+        <li data-at="(status = 'REJECTED') = (rejection_reason IS NOT NULL)"><span class="reads">"A payment has a rejection reason if, and only if, it's rejected."</span>Comparing two true/false values with <code>=</code> is how SQL writes "if and only if".</li>
+        <li data-at="(status = 'COMPLETED') = (journal_entry_id IS NOT NULL)"><span class="reads">"A payment points at a journal entry if, and only if, it's completed."</span><code>PaymentIntegrationTest.databaseRejectsAPaymentStateThatContradictsItsFacts</code> tries to break this with raw SQL and gets <code>payment_check…</code>.</li>
+        <li data-at="status = 'REJECTED' OR hold_id IS NOT NULL"><span class="reads">"Every payment that wasn't rejected has a hold."</span>So "accepted without reserving money" can't be stored.</li>
+      </ol>
+    </figure>
+
+    <div class="prose">
+      <h2 id="c4-failures" data-short="Failure lab">Failure laboratory</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>What goes wrong</th><th>What happens</th></tr></thead>
+        <tbody>
+          <tr><td>Server dies after step 1 or 2</td><td>Payment stays <code>ACCEPTED</code> / <code>PROCESSING</code>, money held. A retry with the key completes it (<code>retryingWithTheSameKeyResumesAPaymentLeftAcceptedOrProcessing</code>)</td></tr>
+          <tr><td>Step 2 or 3 throws (database briefly down)</td><td>Warning logged; <code>202</code> with the last committed state; the retry resumes</td></tr>
+          <tr><td>Client never retries a stuck payment</td><td><b>Its money stays held.</b> No sweeper yet: that's Chapter 7, together with releasing holds when a bank says no</td></tr>
+          <tr><td>Two captures of one hold</td><td>The second waits on the hold's row lock, then finds it no longer <code>ACTIVE</code></td></tr>
+          <tr><td>Payment from, or to, the funding account</td><td><code>400</code>; nothing stored</td></tr>
+          <tr><td>Unknown payer or payee</td><td><code>404</code>; nothing stored; the key is still free</td></tr>
+        </tbody>
+      </table></div>
+
+      <h2 id="c4-run" data-short="Run it yourself">Run it yourself</h2>
+      <div class="cmd"><pre>docker compose -f compose.yaml -f infra/compose.lab.yaml up --build
+node infra/lab/race.mjs --requests 100             # 10 COMPLETED, 90 REJECTED
+node infra/lab/race.mjs --requests 100 --same-key  # 1 payment, 99 replays</pre></div>
+      <div class="evidence"><pre class="printout">Sending 100 A→B payments of $1.00 at once, all A→B with one Idempotency-Key. A starts with $10.00.
+Status codes: 201 × 100
+Payments: COMPLETED × 100; 1 distinct, 99 replays
+Balances: A $9.00, B $1.00, A + B $10.00
+Invariants hold: no negative balance, no money created or destroyed, one key paid once.</pre></div>
+      <p class="fig-cap">Recorded against the lab stack. Abridged: the latency, throughput and connection-pool lines are omitted.</p>
+      <p>The full curl walkthrough is in <a href="https://github.com/cookmcbook/p2p-payments-lab/blob/main/docs/chapters/04-payments.md">docs/chapters/04-payments.md</a>. Run the tests with <code>cd apps/payment-api &amp;&amp; mvn verify</code>; expect <code>Tests run: 83, Failures: 0, Errors: 0</code>.</p>
+
+      <h2 id="c4-exercises" data-short="Exercises">Exercises</h2>
+      <details class="reveal predict"><summary>Send the same payment three times with one key. How many journal entries are posted, and what differs between the three responses?</summary><div><p><b>One entry.</b> All three responses are <code>201</code> with the same <code>id</code> and body; only <code>Idempotent-Replayed</code> differs: <code>false</code>, then <code>true</code>, <code>true</code>.</p></div></details>
+      <details class="reveal predict"><summary>Pay $50.00 from $10.00 with key <code>k</code>. Fund the payer with $100.00 and retry with <code>k</code>. What comes back?</summary><div><p><b>The same <code>REJECTED</code> payment</b>, <code>Idempotent-Replayed: true</code>. A key's answer never changes. A new attempt needs a new key, and that one succeeds. Tested in <code>aReplayedRejectionStaysRejectedEvenAfterThePayerIsFunded</code>.</p></div></details>
+      <details class="reveal predict"><summary>Run <code>race.mjs --requests 100</code> (100 different keys, $1.00 each, from $10.00). How many of each status?</summary><div><p><b><code>COMPLETED × 10, REJECTED × 90</code></b>, and every HTTP status is <code>201</code>. In Chapter 3 the same run gave <code>201 × 10, 409 × 90</code>; now refusals are stored payments.</p></div></details>
+      <details class="reveal predict"><summary>In psql, lock your latest payment row (<code>BEGIN; SELECT … FROM payment … FOR UPDATE;</code>, no commit). Does a <em>new</em> payment wait? Does a replay of the locked one?</summary><div><p><b>Neither waits</b> (recorded: 60 ms and 10 ms). The new payment locks only its own row. The replay finds a <code>COMPLETED</code> payment, which is final, so <code>pay</code> never reaches steps 2 and 3, the only steps that lock the payment.</p></div></details>
+      <details class="reveal predict"><summary>Exercise 5: make <code>placeHold</code> throw <code>InsufficientFundsException</code> instead of returning empty, and have <code>accept</code> catch it and build the <code>REJECTED</code> payment. Run <code>insufficientFundsIsAStoredRejectionAndMovesNothing</code>. What happens?</summary><div><p>It fails: <code>expected: 201 CREATED but was: 500 INTERNAL_SERVER_ERROR</code>. The exception passed through <code>placeHold</code>'s proxy, which marked the shared transaction rollback-only. <code>accept</code> caught the exception and carried on, but its commit then failed with <code>UnexpectedRollbackException: Transaction silently rolled back because it has been marked as rollback-only</code>. Nothing is stored: not the rejection, not the key. Recorded while writing this chapter. Revert afterwards.</p></div></details>
+      <details class="reveal"><summary>Exercise 6: make <code>POST /api/v1/accounts</code> idempotent</summary><div><p>Today a retried account creation opens a second account. What would the key be scoped to, when no payer exists yet? Which fields go into the fingerprint? Is a 24-hour retention right for this endpoint?</p></div></details>
+      <details class="reveal"><summary>Exercise 7: a sweeper for stuck holds</summary><div><p>Add a <code>@Scheduled</code> job that moves payments stuck in <code>ACCEPTED</code> for more than 10 minutes to <code>REJECTED</code> and releases their holds (<code>status = 'RELEASED'</code>). You'll need a new <code>RejectionReason</code>, a transition <code>ACCEPTED → REJECTED</code> and a migration. Why is this safe for <code>ACCEPTED</code>, and why would it be dangerous for a future <code>PROCESSING</code> payment that has called a bank?</p></div></details>
+    </div>
+
+    <div class="prose">
+      <h2 id="c4-quiz" data-short="Quiz">Check your understanding</h2>
+    </div>
+    <div class="quiz" data-quiz="ch-04">
+      <div class="q" data-answer="c">
+        <p class="q-text">A client's request times out. What does it know about the payment?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">It failed, because the server would have answered otherwise</button></li>
+          <li><button data-opt="b">It succeeded, because timeouts only happen after the work</button></li>
+          <li><button data-opt="c">Nothing: the server may not have started, may still be working, or may have finished</button></li>
+          <li><button data-opt="d">The server rolled it back when the client left</button></li>
+        </ul>
+        <p class="q-why" hidden>Recorded: the client gave up at 2017 ms; the server completed the payment 0.7 s later and answered nobody. Only a retry with the same key turns "don't know" into an answer.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">Same <code>Idempotency-Key</code>, same payer, but the amount changed from $3.00 to $4.00. What does the server do?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Returns the original $3.00 payment</button></li>
+          <li><button data-opt="b">Refuses with 422: the fingerprint doesn't match, and nothing is stored</button></li>
+          <li><button data-opt="c">Creates a second, $4.00 payment</button></li>
+          <li><button data-opt="d">Updates the original payment to $4.00</button></li>
+        </ul>
+        <p class="q-why" hidden>A key means one specific request. Returning the $3.00 payment would mislead the client; creating a new one would make the key meaningless. Payments are never edited.</p>
+      </div>
+      <div class="q" data-answer="a">
+        <p class="q-text">Why does Alice's available balance drop while a payment is <code>ACCEPTED</code>, but her ledger balance doesn't?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">A hold reserves the money; the journal entry that moves it is posted only when the hold is captured</button></li>
+          <li><button data-opt="b">The ledger balance is cached and updates later</button></li>
+          <li><button data-opt="c">Available balance is an estimate</button></li>
+          <li><button data-opt="d">The payee's account hasn't been locked yet</button></li>
+        </ul>
+        <p class="q-why" hidden>Ledger = sum of postings; available = ledger minus active holds. Recorded after step 1 only: <code>ledgerMinor 1000, availableMinor 400</code>.</p>
+      </div>
+      <div class="q" data-answer="d">
+        <p class="q-text">Placing a hold doesn't insert a posting. Why does it still lock the account with <code>FOR NO KEY UPDATE</code>?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">PostgreSQL requires a lock before any INSERT</button></li>
+          <li><button data-opt="b">To stop the account being deleted</button></li>
+          <li><button data-opt="c">To make the foreign key check faster</button></li>
+          <li><button data-opt="d">It's a check-then-act on available money: without the lock, two holds could both read the same available balance and together reserve more than exists</button></li>
+        </ul>
+        <p class="q-why" hidden>Same race as Chapter 3, with holds instead of debits. Removing the lock makes <code>aWaitingHoldReadsTheHoldCommittedWhileItWaited</code> fail: T2 no longer waits.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">Twenty requests with one new key arrive at once. How does only one become a payment?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">A <code>synchronized</code> block in <code>PaymentService</code></button></li>
+          <li><button data-opt="b">The first request locks the whole <code>idempotency_key</code> table</button></li>
+          <li><button data-opt="c">The primary key: the first INSERT wins, and each other INSERT … ON CONFLICT waits for it to commit, then inserts 0 rows and replays its payment</button></li>
+          <li><button data-opt="d">Tomcat queues requests with the same header</button></li>
+        </ul>
+        <p class="q-why" hidden>Recorded: <code>payments=1 fresh=1 replayed=19</code>. A JVM lock would only work for one instance of the app; the database's unique index works for every writer.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">Why does <code>placeHold</code> return <code>Optional.empty()</code> for insufficient funds instead of throwing?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Exceptions are slow</button></li>
+          <li><button data-opt="b">An exception leaving it would mark the shared transaction rollback-only, so the REJECTED payment could not be committed</button></li>
+          <li><button data-opt="c">Optional is required by Spring for @Transactional methods</button></li>
+          <li><button data-opt="d">So the client gets a 409</button></li>
+        </ul>
+        <p class="q-why" hidden><code>placeHold</code> joins <code>accept</code>'s transaction. Spring's interceptor marks a joined transaction rollback-only when a runtime exception passes through it, even if the caller catches the exception afterwards.</p>
+      </div>
+      <div class="q" data-answer="a">
+        <p class="q-text">Why are the three steps on a separate bean, <code>PaymentSteps</code>, instead of private methods of <code>PaymentService</code>?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">A call from inside the same object doesn't pass through Spring's proxy, so <code>@Transactional</code> on those methods would do nothing</button></li>
+          <li><button data-opt="b">Spring forbids more than one <code>@Transactional</code> method per class</button></li>
+          <li><button data-opt="c">To make the tests faster</button></li>
+          <li><button data-opt="d">Private methods can't access the database</button></li>
+        </ul>
+        <p class="q-why" hidden>The proxy wraps calls that come <em>from outside</em> the bean. <code>this.complete()</code> is a plain Java call. See <a href="hood.html#h-proxy">Under the hood</a>.</p>
+      </div>
+      <div class="q" data-answer="d">
+        <p class="q-text">A payment is <code>INDETERMINATE</code>. What should the system do next?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Retry the transfer automatically until it succeeds</button></li>
+          <li><button data-opt="b">Mark it REJECTED and release the hold immediately</button></li>
+          <li><button data-opt="c">Move it back to PROCESSING</button></li>
+          <li><button data-opt="d">Find out what actually happened (reconciliation), then move it to COMPLETED or REJECTED</button></li>
+        </ul>
+        <p class="q-why" hidden>Retrying might move the money twice; releasing might give back money that already left. <code>canMoveTo</code> only allows <code>INDETERMINATE → COMPLETED | REJECTED</code>. Chapter 7 builds the reconciliation.</p>
+      </div>
+    </div>
+
+    <nav class="chapter-nav prose" aria-label="Chapter navigation">
+      <a href="ch-03.html"><small>Previous</small>Ledger and concurrency</a>
+      <a class="next" href="glossary.html"><small>Next</small>Glossary (Chapter 5 is planned)</a>
+    </nav>
+  </section>
+  </main>
+</div>
+
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-docker.min.js"></script>
+<script src="glossary.js"></script>
+<script src="book.js"></script>
+</body>
+</html>

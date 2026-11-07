@@ -1,5 +1,6 @@
 package dev.p2plab.payments.ledger.persistence;
 
+import dev.p2plab.payments.ledger.domain.Hold;
 import dev.p2plab.payments.ledger.domain.JournalEntry;
 import dev.p2plab.payments.ledger.domain.LedgerAccount;
 import dev.p2plab.payments.ledger.domain.LedgerRepository;
@@ -8,6 +9,7 @@ import dev.p2plab.payments.money.Currency;
 import dev.p2plab.payments.money.Money;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -46,12 +48,69 @@ class JpaLedgerRepository implements LedgerRepository {
     }
 
     @Override
+    public Money held(UUID accountId, Currency currency) {
+        Object sum = entityManager
+            .createNativeQuery("SELECT COALESCE(SUM(amount_minor), 0) FROM ledger_hold WHERE account_id = :id AND status = 'ACTIVE'")
+            .setParameter("id", accountId)
+            .getSingleResult();
+        return new Money(((BigDecimal) sum).longValueExact(), currency);
+    }
+
+    @Override
     public void append(JournalEntry entry) {
         // Persist order is insert order: the entry row must exist before postings reference it.
         entityManager.persist(JournalEntryEntity.from(entry));
         for (Posting posting : entry.postings()) {
             entityManager.persist(PostingEntity.from(entry.id(), posting));
         }
+    }
+
+    @Override
+    public void addHold(Hold hold) {
+        // Executed immediately (not at flush), so the payment row inserted later can reference it.
+        entityManager.createNativeQuery("""
+                INSERT INTO ledger_hold (id, account_id, amount_minor, currency, status, created_at)
+                VALUES (:id, :account, :amount, :currency, 'ACTIVE', :createdAt)""")
+            .setParameter("id", hold.id())
+            .setParameter("account", hold.accountId())
+            .setParameter("amount", hold.amount().amountMinor())
+            .setParameter("currency", hold.amount().currency().name())
+            .setParameter("createdAt", hold.createdAt())
+            .executeUpdate();
+    }
+
+    @Override
+    public Optional<Hold> captureHold(UUID holdId, UUID entryId, Instant at) {
+        // FOR UPDATE: a second capture of the same hold waits here, then sees it is no longer ACTIVE.
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT account_id, amount_minor, currency, created_at FROM ledger_hold
+                WHERE id = :id AND status = 'ACTIVE' FOR UPDATE""")
+            .setParameter("id", holdId)
+            .getResultList();
+        if (rows.isEmpty()) {
+            return Optional.empty();
+        }
+        entityManager.createNativeQuery("""
+                UPDATE ledger_hold SET status = 'CAPTURED', journal_entry_id = :entry, closed_at = :at WHERE id = :id""")
+            .setParameter("entry", entryId)
+            .setParameter("at", at)
+            .setParameter("id", holdId)
+            .executeUpdate();
+        Object[] row = rows.get(0);
+        return Optional.of(new Hold(holdId, (UUID) row[0],
+            new Money(((Number) row[1]).longValue(), Currency.valueOf(((String) row[2]).trim())), toInstant(row[3])));
+    }
+
+    private static Instant toInstant(Object value) {
+        // PostgreSQL's JDBC driver returns TIMESTAMPTZ as OffsetDateTime or Timestamp depending on the path.
+        if (value instanceof Instant instant) {
+            return instant;
+        }
+        if (value instanceof java.time.OffsetDateTime odt) {
+            return odt.toInstant();
+        }
+        return ((java.sql.Timestamp) value).toInstant();
     }
 
     private Optional<LedgerAccount> selectAccount(String sql, UUID accountId) {

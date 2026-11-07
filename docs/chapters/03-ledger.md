@@ -2,6 +2,8 @@
 
 The interactive version, with tracers, the race playground (including a timeline that shows when each transaction read, waited and committed) and a quiz, is [`docs/book/ch-03.html`](../book/ch-03.html). Every log line and number below was recorded from the running service (or its tests) on 30 October 2026; most are abridged, and say so.
 
+> **Reading this after Chapter 4?** `POST /lab/ledger/transfers`, used below, was replaced by the payment API, `POST /api/v1/payments` ([Chapter 4](04-payments.md)). The recordings show what Chapter 3's code did. `race.mjs` now sends payments: its default run prints `COMPLETED × 10, REJECTED × 90`, all with HTTP 201, instead of `201 × 10, 409 × 90`. The ledger, the lock and every Chapter 3 test are unchanged. To replay this chapter exactly, check out commit `4728653`.
+
 ## Learning objectives
 
 By the end of this chapter you can:

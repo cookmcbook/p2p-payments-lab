@@ -1,7 +1,9 @@
-// Chapter 3 experiment: fire many simultaneous transfers from one account at the running service, then check
-// that no money was created or destroyed. Needs Node 18+ and the lab overlay (infra/compose.lab.yaml).
-//   node infra/lab/race.mjs [--requests 100] [--amount 100] [--fund 1000] [--opposite]
-// --opposite also sends the same number of transfers back from B to A, to show that they don't deadlock.
+// Chapters 3-4 experiment: fire many simultaneous payments from one account at the running service, then check
+// that no money was created or destroyed. Needs Node 18+ and the lab overlay (infra/compose.lab.yaml), which
+// is used only to fund account A. Payments go through POST /api/v1/payments.
+//   node infra/lab/race.mjs [--requests 100] [--amount 100] [--fund 1000] [--opposite] [--same-key]
+// --opposite also sends the same number of payments back from B to A, to show that they don't deadlock.
+// --same-key sends every A->B request with ONE Idempotency-Key, like a client retrying: exactly one payment results.
 const args = {};
 for (let i = 2; i < process.argv.length; i++) {
   const name = process.argv[i].replace(/^--/, "");
@@ -13,12 +15,14 @@ const requests = Number(args.requests ?? 100);
 const amount = Number(args.amount ?? 100);
 const fund = Number(args.fund ?? 1000);
 const opposite = Boolean(args.opposite);
+const sameKey = Boolean(args["same-key"]);
+const runId = Date.now().toString(36);
 
-async function call(method, path, body) {
+async function call(method, path, body, headers = {}) {
   const started = performance.now();
   const res = await fetch(base + path, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : {},
+    headers: body ? { "Content-Type": "application/json", ...headers } : headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -31,7 +35,8 @@ async function openAccount(name) {
   return res.body.id;
 }
 const balance = async (id) => (await call("GET", `/api/v1/accounts/${id}/balance`)).body.ledgerMinor;
-const transfer = (from, to) => call("POST", "/lab/ledger/transfers", { fromAccountId: from, toAccountId: to, amountMinor: amount, currency: "USD" });
+const pay = (from, to, key) => call("POST", "/api/v1/payments", { payeeAccountId: to, amountMinor: amount, currency: "USD" },
+  { "X-Payer-Account-Id": from, "Idempotency-Key": key });
 const dollars = (cents) => (cents < 0 ? "-" : "") + "$" + (Math.abs(cents) / 100).toFixed(2);
 const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
 
@@ -60,23 +65,32 @@ const sampler = (async () => {
 })();
 
 const label = opposite ? `${requests} A→B and ${requests} B→A` : `${requests} A→B`;
-console.log(`Sending ${label} transfers of ${dollars(amount)} at once. ${opposite ? "A and B each start" : "A starts"} with ${dollars(fund)}.`);
+console.log(`Sending ${label} payments of ${dollars(amount)} at once${sameKey ? ", all A→B with one Idempotency-Key" : ""}. `
+  + `${opposite ? "A and B each start" : "A starts"} with ${dollars(fund)}.`);
 const started = performance.now();
 const results = await Promise.all([
-  ...Array.from({ length: requests }, () => transfer(a, b)),
-  ...(opposite ? Array.from({ length: requests }, () => transfer(b, a)) : []),
+  ...Array.from({ length: requests }, (_, i) => pay(a, b, sameKey ? `${runId}-retry` : `${runId}-ab-${i}`)),
+  ...(opposite ? Array.from({ length: requests }, (_, i) => pay(b, a, `${runId}-ba-${i}`)) : []),
 ]);
 const elapsed = performance.now() - started;
 sampling = false;
 await sampler;
 
 const byStatus = {};
-for (const r of results) byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
+const byOutcome = {};
+for (const r of results) {
+  byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
+  const outcome = r.body?.status ?? "error";
+  byOutcome[outcome] = (byOutcome[outcome] ?? 0) + 1;
+}
+const paymentIds = new Set(results.filter((r) => r.body?.id).map((r) => r.body.id));
+const replayed = results.filter((r) => r.body?.id && r.status < 300).length - paymentIds.size;
 const times = results.map((r) => r.ms).sort((x, y) => x - y);
 const [balA, balB] = [await balance(a), await balance(b)];
 const total = fund * (opposite ? 2 : 1);
 
 console.log(`Status codes: ${Object.entries(byStatus).map(([s, n]) => `${s} × ${n}`).join(", ")}`);
+console.log(`Payments: ${Object.entries(byOutcome).map(([s, n]) => `${s} × ${n}`).join(", ")}; ${paymentIds.size} distinct, ${replayed} replays`);
 console.log(`Latency ms: min ${times[0].toFixed(0)}, median ${percentile(times, 0.5).toFixed(0)}, p95 ${percentile(times, 0.95).toFixed(0)}, max ${times.at(-1).toFixed(0)}`);
 console.log(`Throughput: ${(results.length / (elapsed / 1000)).toFixed(0)} requests/s over ${elapsed.toFixed(0)} ms`);
 if (pool.available) console.log(pool.samples
@@ -87,7 +101,10 @@ console.log(`Balances: A ${dollars(balA)}, B ${dollars(balB)}, A + B ${dollars(b
 const problems = [];
 if (balA < 0 || balB < 0) problems.push("a customer balance went negative");
 if (balA + balB !== total) problems.push(`money was created or destroyed: A + B should be ${dollars(total)}`);
-if (!opposite && (byStatus[201] ?? 0) !== Math.min(requests, Math.floor(fund / amount))) problems.push("unexpected number of successful transfers");
-if (Object.keys(byStatus).some((s) => s !== "201" && s !== "409")) problems.push("some requests failed with something other than 201 or 409");
-console.log(problems.length ? `INVARIANT BROKEN: ${problems.join("; ")}` : "Invariants hold: no negative balance, and no money created or destroyed.");
+const expectedPaid = sameKey ? Math.min(1, Math.floor(fund / amount)) : Math.min(requests, Math.floor(fund / amount));
+if (!opposite && fund - balA !== expectedPaid * amount) problems.push(`A should have paid exactly ${dollars(expectedPaid * amount)}`);
+if (sameKey && paymentIds.size !== 1) problems.push("one Idempotency-Key produced more than one payment");
+if (Object.keys(byStatus).some((s) => s !== "201")) problems.push("some requests returned something other than 201");
+console.log(problems.length ? `INVARIANT BROKEN: ${problems.join("; ")}`
+  : `Invariants hold: no negative balance, no money created or destroyed${sameKey ? ", one key paid once" : ""}.`);
 process.exitCode = problems.length ? 1 : 0;

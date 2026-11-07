@@ -29,12 +29,13 @@
       <li><a href="ch-02.html"><span class="no">02</span><span>Accounts</span><span class="score" data-score="ch-02" data-total="10"></span></a></li>
       <li><a href="hood.html"><span class="no">UH</span><span>Under the hood</span><span class="score" data-score="hood" data-total="10"></span></a></li>
       <li><a href="ch-03.html"><span class="no">03</span><span>Ledger and concurrency</span><span class="score" data-score="ch-03" data-total="10"></span></a></li>
+      <li><a href="ch-04.html"><span class="no">04</span><span>Payments and idempotency</span><span class="score" data-score="ch-04" data-total="8"></span></a></li>
       <li><a href="glossary.html"><span class="no">Gl</span><span>Glossary</span></a></li>
     </ul>
     <ul class="toc pending" aria-label="Planned chapters">
-      <li><span class="toc-planned">04 · Payments and idempotency</span></li>
       <li><span class="toc-planned">05 · Authentication</span></li>
       <li><span class="toc-planned">06 · Kafka and the outbox</span></li>
+      <li><span class="toc-planned">07 · Bank adapter and reconciliation</span></li>
     </ul>
     <div class="rail-foot">
       <div class="theme-toggle" role="group" aria-label="Theme">
@@ -65,6 +66,7 @@
         </ul>
       </div>
       <div class="callout"><p><b>How to read this chapter.</b> Each section starts with the idea in a few sentences. The tracers, the playground and the <b>Under the hood</b> boxes go deeper. Every log line, error and number was recorded from this project's running service on 30 October 2026, or from its tests; most are abridged (timestamps and package names shortened), and the captions say so.</p></div>
+      <div class="callout"><p><b>Reading this after Chapter 4?</b> The lab endpoint <code>POST /lab/ledger/transfers</code> used in this chapter's traces and exercises was replaced by <a href="ch-04.html">the payment API</a>, <code>POST /api/v1/payments</code>. The recordings below are what Chapter 3's code did. Today <code>race.mjs</code> sends payments: its default run prints <code>COMPLETED × 10, REJECTED × 90</code>, all with status 201, instead of <code>201 × 10, 409 × 90</code>. The ledger, the lock and every Chapter 3 test are unchanged. To replay the chapter exactly, check out commit <code>4728653</code>.</p></div>
 
       <details class="reveal primer"><summary>New to backend work? Start here: six ideas this chapter builds on</summary><div>
         <p>Each idea below has three parts: what it is, why this chapter needs it, and where you'll see it. Every tracer step in this chapter uses the same pattern, with the full technical detail one click further down.</p>
@@ -696,9 +698,9 @@ private JournalEntry post(JournalEntry entry) {
         UUID id = posting.accountId();
         if (posting.isDebit()) {
             LedgerAccount account = ledger.lockForDebit(id).orElseThrow(() -&gt; new UnknownLedgerAccountException(id));
-            // Read the balance only AFTER taking the lock: every earlier debit of this account has committed
-            // by now, and this statement's fresh snapshot includes it. Check-then-insert is safe only here.
-            account.checkDebit(ledger.balance(id, account.currency()), posting);
+            // Read the balance only AFTER taking the lock: every earlier debit and hold of this account has
+            // committed by now, and this statement's fresh snapshot includes it. Check-then-insert is safe only here.
+            account.checkDebit(available(account), posting);
         } else {
             ledger.find(id).orElseThrow(() -&gt; new UnknownLedgerAccountException(id)).checkCredit(posting);
         }
@@ -713,7 +715,7 @@ private JournalEntry post(JournalEntry entry) {
         <li data-at="balance(UUID accountId" data-span="3"><span class="reads">"To get a balance, ask the ledger." <code>readOnly = true</code> tells Spring and the database that this transaction won't write anything.</span>The balance endpoint in <code>AccountService</code> now calls this, replacing Chapter 2's hard-coded zero.</li>
         <li data-at="sorted(Comparator.comparing"><span class="reads">"Take the entry's postings, sort them by account id, and handle each one in turn." <code>posting -&gt; { … }</code> is a lambda: a small unnamed function that runs once for each posting.</span>A fixed global order for every lock. Every transaction that needs rows A and B takes them in the same sequence, so a cycle of waits can't form.</li>
         <li data-at="lockForDebit"><span class="reads">"If this posting takes money out, lock the account. If the account doesn't exist, fail with 'unknown account'." <code>orElseThrow</code> unwraps an <code>Optional</code>, a box that either holds a value or is empty, and throws if it's empty.</span>Step one for a debit: <code>SELECT … FOR NO KEY UPDATE</code>. If another debit of this account is in flight, this line blocks until that transaction ends.</li>
-        <li data-at="account.checkDebit(ledger.balance"><span class="reads">"Read the account's balance, then check that this debit won't take it below zero." Java runs the inner call first, so <code>ledger.balance(…)</code> happens before <code>checkDebit(…)</code>.</span>Step two: read the balance <em>after</em> the lock, then check it. Swap the order of these two lines and the race returns.</li>
+        <li data-at="account.checkDebit(available(account)"><span class="reads">"Read how much the account can spend, then check that this debit won't take it below zero." Java runs the inner call first, so <code>available(…)</code> happens before <code>checkDebit(…)</code>.</span>Step two: read the balance <em>after</em> the lock, then check it. Swap the order of these two lines and the race returns. In this chapter <code>available</code> is simply the sum of the postings. <a href="ch-04.html">Chapter 4</a> subtracts money held for in-flight payments; the excerpt shows today's code.</li>
         <li data-at="ledger.find(id)"><span class="reads">"Otherwise (it's money coming in): look the account up without locking it, and check it can receive this currency."</span>Credits only check that the account exists and has the right currency. Not locking them means many payments to one popular account don't queue behind each other.</li>
         <li data-at="ledger.append(entry)"><span class="reads">"Every posting passed its checks, so save the entry."</span>Queues three INSERTs in Hibernate. They are sent at commit, while the lock is still held.</li>
       </ol>
@@ -928,7 +930,7 @@ docker compose exec postgres psql -U p2p_lab -d p2p_lab -c "SELECT SUM(amount_mi
 
     <nav class="chapter-nav prose" aria-label="Chapter navigation">
       <a href="hood.html"><small>Previous</small>Under the hood</a>
-      <a class="next" href="glossary.html"><small>Next</small>Glossary (Chapter 4 is planned)</a>
+      <a class="next" href="ch-04.html"><small>Next</small>Payments and idempotency</a>
     </nav>
   </section>
   </main>

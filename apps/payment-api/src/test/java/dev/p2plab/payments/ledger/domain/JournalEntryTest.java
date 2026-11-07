@@ -75,6 +75,21 @@ class JournalEntryTest {
     }
 
     @Test
+    void canSpendComparesTheAmountWithTheAvailableBalance() {
+        LedgerAccount customer = new LedgerAccount(A, Currency.USD, false);
+
+        assertThat(customer.canSpend(usd(500), usd(500))).isTrue();
+        assertThat(customer.canSpend(usd(499), usd(500))).isFalse();
+        assertThat(customer.canSpend(usd(-100), usd(1))).isFalse();
+    }
+
+    @Test
+    void holdMustBePositive() {
+        assertThatThrownBy(() -> Hold.place(A, usd(0), CLOCK)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(Hold.place(A, usd(500), CLOCK).createdAt()).isEqualTo(Instant.parse("2026-01-01T00:00:00.123456Z"));
+    }
+
+    @Test
     void fundingSourceMayGoNegative() {
         LedgerAccount funding = new LedgerAccount(LedgerAccount.FUNDING_SOURCE_ID, Currency.USD, true);
 

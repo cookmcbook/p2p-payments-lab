@@ -44,9 +44,10 @@ public class AccountService {
     @Transactional(readOnly = true)
     public AccountBalance balance(UUID id) {
         Account account = get(id);
-        // Derived from postings, never stored (ADR 0002). Nothing is held yet, so available equals ledger;
-        // holds for in-flight payments arrive in Chapter 4.
+        // Both derived, never stored (ADR 0002, ADR 0008). Available is lower than ledger while payments are in
+        // flight: their money is held, not yet moved. Both reads share this transaction.
         Money ledgerBalance = ledger.balance(account.id(), account.currency());
-        return new AccountBalance(account.id(), ledgerBalance, ledgerBalance);
+        Money available = ledger.available(account.id(), account.currency());
+        return new AccountBalance(account.id(), ledgerBalance, available);
     }
 }

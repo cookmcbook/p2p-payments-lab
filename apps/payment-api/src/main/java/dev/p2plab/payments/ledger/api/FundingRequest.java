@@ -9,6 +9,9 @@ import java.util.UUID;
 /** Amounts are integer minor units (cents). The cap keeps lab amounts far from {@code long} overflow. */
 public record FundingRequest(
     @NotNull UUID accountId,
-    @Positive @Max(TransferRequest.MAX_AMOUNT_MINOR) long amountMinor,
+    @Positive @Max(MAX_AMOUNT_MINOR) long amountMinor,
     @NotNull @Pattern(regexp = "USD", message = "only USD is supported") String currency) {
+
+    /** $1,000,000.00 */
+    static final long MAX_AMOUNT_MINOR = 100_000_000L;
 }

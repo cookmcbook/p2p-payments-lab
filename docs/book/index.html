@@ -29,12 +29,13 @@
       <li><a href="ch-02.html"><span class="no">02</span><span>Accounts</span><span class="score" data-score="ch-02" data-total="10"></span></a></li>
       <li><a href="hood.html"><span class="no">UH</span><span>Under the hood</span><span class="score" data-score="hood" data-total="10"></span></a></li>
       <li><a href="ch-03.html"><span class="no">03</span><span>Ledger and concurrency</span><span class="score" data-score="ch-03" data-total="10"></span></a></li>
+      <li><a href="ch-04.html"><span class="no">04</span><span>Payments and idempotency</span><span class="score" data-score="ch-04" data-total="8"></span></a></li>
       <li><a href="glossary.html"><span class="no">Gl</span><span>Glossary</span></a></li>
     </ul>
     <ul class="toc pending" aria-label="Planned chapters">
-      <li><span class="toc-planned">04 · Payments and idempotency</span></li>
       <li><span class="toc-planned">05 · Authentication</span></li>
       <li><span class="toc-planned">06 · Kafka and the outbox</span></li>
+      <li><span class="toc-planned">07 · Bank adapter and reconciliation</span></li>
     </ul>
     <div class="rail-foot">
       <div class="theme-toggle" role="group" aria-label="Theme">
@@ -61,7 +62,7 @@
       <a class="ledger-row" role="row" href="ch-02.html"><span class="no">02</span><span class="t">Accounts, and a balance that cannot lie<small>Layers, migrations, minor units, Testcontainers</small></span><span class="pill posted">Posted</span><span class="score" data-score="ch-02" data-total="10"></span></a>
       <a class="ledger-row" role="row" href="hood.html"><span class="no">UH</span><span class="t">Under the hood<small>Spring, the transaction proxy, JPA vs Hibernate, PostgreSQL locks, Docker layers. Read alongside 01–03</small></span><span class="pill posted">Companion</span><span class="score" data-score="hood" data-total="10"></span></a>
       <a class="ledger-row" role="row" href="ch-03.html"><span class="no">03</span><span class="t">A ledger that can't lose a cent, even under a crowd<small>Double entry, atomicity, races, row locks, 1,000 requests at once</small></span><span class="pill posted">Posted</span><span class="score" data-score="ch-03" data-total="10"></span></a>
-      <div class="ledger-row" role="row"><span class="no">04</span><span class="t">Payment API and idempotency<small>Lifecycle states, retries, request fingerprints</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
+      <a class="ledger-row" role="row" href="ch-04.html"><span class="no">04</span><span class="t">A payment you can safely send twice<small>Lifecycle states, holds, idempotency keys, retries and timeouts</small></span><span class="pill posted">Posted</span><span class="score" data-score="ch-04" data-total="8"></span></a>
       <div class="ledger-row" role="row"><span class="no">05</span><span class="t">Authentication and payer ownership<small>Spring Security</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
       <div class="ledger-row" role="row"><span class="no">06</span><span class="t">Kafka events and the transactional outbox<small>Durable publication, consumer deduplication</small></span><span class="pill pending">Pending</span><span class="score"></span></div>
       <div class="ledger-row" role="row"><span class="no">07</span><span class="t">Mock interbank adapter and reconciliation<small>Timeouts, indeterminate outcomes</small></span><span class="pill pending">Pending</span><span class="score"></span></div>

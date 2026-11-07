@@ -29,12 +29,13 @@
       <li><a href="ch-02.html"><span class="no">02</span><span>Accounts</span><span class="score" data-score="ch-02" data-total="10"></span></a></li>
       <li><a href="hood.html"><span class="no">UH</span><span>Under the hood</span><span class="score" data-score="hood" data-total="10"></span></a></li>
       <li><a href="ch-03.html"><span class="no">03</span><span>Ledger and concurrency</span><span class="score" data-score="ch-03" data-total="10"></span></a></li>
+      <li><a href="ch-04.html"><span class="no">04</span><span>Payments and idempotency</span><span class="score" data-score="ch-04" data-total="8"></span></a></li>
       <li><a href="glossary.html"><span class="no">Gl</span><span>Glossary</span></a></li>
     </ul>
     <ul class="toc pending" aria-label="Planned chapters">
-      <li><span class="toc-planned">04 · Payments and idempotency</span></li>
       <li><span class="toc-planned">05 · Authentication</span></li>
       <li><span class="toc-planned">06 · Kafka and the outbox</span></li>
+      <li><span class="toc-planned">07 · Bank adapter and reconciliation</span></li>
     </ul>
     <div class="rail-foot">
       <div class="theme-toggle" role="group" aria-label="Theme">
@@ -170,15 +171,15 @@ public class PaymentApiApplication {
 public class CapabilitiesController {
     @GetMapping("/capabilities")
     public Map&lt;String, Object&gt; capabilities() {
-        return Map.of("service", "p2p-payments-lab", "paymentProcessingEnabled", false, "accountsEnabled", true,
-            "ledgerEnabled", true, "chapter", 3);
+        return Map.of("service", "p2p-payments-lab", "paymentProcessingEnabled", true, "accountsEnabled", true,
+            "ledgerEnabled", true, "idempotencyEnabled", true, "chapter", 4);
     }
 }
 </pre>
       <ol class="notes">
         <li data-at="@RestController"><code>@RestController</code> marks this class as an HTTP handler whose return values are written straight to the response body as JSON.</li>
         <li data-at="@RequestMapping" data-span="4">The class-level <code>/api/v1/payments</code> and method-level <code>/capabilities</code> combine into <code>GET /api/v1/payments/capabilities</code>. The <code>v1</code> lets a future breaking change live at <code>v2</code> without breaking existing clients.</li>
-        <li data-at="paymentProcessingEnabled"><code>paymentProcessingEnabled: false</code> is deliberate. A client or operator that sees a healthy service must not conclude that it can move money. The flag changes only when a chapter actually implements payments. Chapter 3 added an internal ledger (<code>ledgerEnabled: true</code>) but still no payment API, so it stays <code>false</code>.</li>
+        <li data-at="paymentProcessingEnabled"><code>paymentProcessingEnabled: false</code> is deliberate. A client or operator that sees a healthy service must not conclude that it can move money. The flag changes only when a chapter actually implements payments. In Chapter 1 it was <code>false</code>, and Chapter 3's internal ledger (<code>ledgerEnabled: true</code>) still didn't change it. The excerpt shows today's code: <a href="ch-04.html">Chapter 4</a> adds the payment API and flips it to <code>true</code>.</li>
       </ol>
     </figure>
 
@@ -271,7 +272,7 @@ ENTRYPOINT ["java", "-jar", "/app/app.jar"]
               "deep": "Note there is no <code>Mapped to …</code> line. When no controller matches, Spring tries to serve a static file (images, HTML) from the classpath, finds none, and throws <code>NoResourceFoundException</code>. That's why the 404 detail talks about a \"static resource\"."},
              {"lane": 0, "text": "The client gets a problem response instead of a payment."}
            ],
-           "result": {"ok": false, "status": "404 Not Found", "summary": "There is no payments endpoint yet, by design."}},
+           "result": {"ok": false, "status": "404 Not Found", "summary": "There is no payments endpoint yet, by design. (Recorded in Chapter 1; Chapter 4 adds it.)"}},
           {"label": "POST capabilities", "request": "POST /api/v1/payments/capabilities",
            "steps": [
              {"lane": 0, "text": "The right path with the wrong method."},
@@ -303,7 +304,7 @@ curl http://localhost:8080/api/v1/payments/capabilities</pre></div>
       <p>On Windows PowerShell, type <code>curl.exe</code>; plain <code>curl</code> there is an alias for a different command.</p>
 
       <h2 id="c1-exercises" data-short="Exercises">Exercises</h2>
-      <details class="reveal predict"><summary>What does <code>curl -X POST http://localhost:8080/api/v1/payments</code> return?</summary><div><p><b>404 Not Found</b> with a problem body: <code>"detail":"No static resource api/v1/payments."</code>. Nothing maps that path yet. Compare with <code>POST /api/v1/payments/capabilities</code>, which returns <b>405</b> because that path exists for GET.</p></div></details>
+      <details class="reveal predict"><summary>What does <code>curl -X POST http://localhost:8080/api/v1/payments</code> return?</summary><div><p>At the end of Chapter 1: <b>404 Not Found</b> with a problem body, <code>"detail":"No static resource api/v1/payments."</code>, because nothing mapped that path. Compare with <code>POST /api/v1/payments/capabilities</code>, which returns <b>405</b> because that path exists for GET. Since <a href="ch-04.html">Chapter 4</a> the path exists, and the same bare request gets <b>400</b>: <code>"Required header 'X-Payer-Account-Id' is not present."</code></p></div></details>
       <details class="reveal"><summary>Explain the difference between the Dockerfile and compose.yaml</summary><div><p>The Dockerfile describes how to build <em>one image</em>. <code>compose.yaml</code> describes how to <em>run several containers together</em>: which images, which environment variables, which ports, and in what order (the API waits for PostgreSQL's health check).</p></div></details>
       <details class="reveal"><summary>Which file controls the database schema?</summary><div><p>The SQL files in <code>apps/payment-api/src/main/resources/db/migration/</code>, applied by Flyway. Not Hibernate: <code>ddl-auto: validate</code> only checks.</p></div></details>
       <details class="reveal"><summary>Add a safe field to the capabilities response</summary><div><p>Add for example <code>"currency", "USD"</code> to the <code>Map.of(...)</code>. The existing <code>CapabilitiesControllerTest</code> still passes, because it checks specific fields, not the whole body. Add an assertion for your new field, run <code>mvn verify</code>, and update this book's code excerpt. The CI snippet check fails if you forget.</p></div></details>

@@ -20,5 +20,6 @@ The coding agent must update docs/ARCHITECTURE.md alongside any important code s
 - [02 — Accounts, persistence, and a balance that cannot lie](chapters/02-accounts.md)
 - [Companion — Under the hood: Spring, JPA/Hibernate, PostgreSQL locks and Docker](chapters/companion-under-the-hood.md) (read alongside 01–03; interactive at `book/hood.html`)
 - [03 — A ledger that can't lose a cent, even under a crowd](chapters/03-ledger.md) (double entry, atomicity, race conditions, row locks, load)
+- [04 — A payment you can safely send twice](chapters/04-payments.md) (payment lifecycle, holds, idempotency keys, retries and timeouts)
 
 See [the roadmap](ROADMAP.md) for future chapters. Do not treat roadmap entries as implemented functionality.
