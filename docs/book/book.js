@@ -41,45 +41,33 @@
     if (saved !== "system") apply(saved); else $$(".theme-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === "system")));
   }
 
-  /* ---------------- router (one view per chapter) ---------------- */
-  function initRouter() {
-    const views = $$("[data-view]");
-    const names = views.map((v) => v.dataset.view);
-    const show = () => {
-      const want = location.hash.slice(1);
-      const name = names.includes(want) ? want : "home";
-      views.forEach((v) => (v.hidden = v.dataset.view !== name));
-      $$(".toc a").forEach((a) => a.toggleAttribute("aria-current", a.getAttribute("href") === "#" + name));
-      $$(".toc a[aria-current]").forEach((a) => a.setAttribute("aria-current", "page"));
-      buildSubToc(name);
-      $(".rail").classList.remove("open");
-      window.scrollTo(0, 0);
-      const view = views.find((v) => v.dataset.view === name);
-      document.title = (view.dataset.title ? view.dataset.title + " · " : "") + "P2P Payments Lab Textbook";
-      view.dispatchEvent(new CustomEvent("viewshown"));
-    };
-    window.addEventListener("hashchange", show);
-    show();
-    // <a href="#view" data-jump="heading-id">: open the view, then scroll to a heading inside it.
-    document.addEventListener("click", (e) => {
-      const a = e.target.closest("a[data-jump]");
-      if (!a) return;
-      e.preventDefault();
-      if (location.hash !== a.getAttribute("href")) { location.hash = a.getAttribute("href"); }
-      const target = document.getElementById(a.dataset.jump);
-      if (target) requestAnimationFrame(() => target.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth" }));
-    });
+  /* ---------------- navigation (one page per chapter) ---------------- */
+  const pageName = () => location.pathname.split("/").pop() || "index.html";
+
+  // Links from the single-page edition looked like index.html#ch-03. Send them to the chapter's own page.
+  // Returns true when the page is being replaced, so boot can stop.
+  function redirectOldLink() {
+    const old = location.hash.slice(1);
+    if (pageName() !== "index.html" || !$(`.toc a[href="${old}.html"]`)) return false;
+    location.replace(old + ".html");
+    return true;
+  }
+
+  function initNav() {
+    const link = $$(".toc a").find((a) => a.getAttribute("href") === pageName());
+    if (link) link.setAttribute("aria-current", "page");
+    buildSubToc(link);
     const menu = $(".topbar button");
     if (menu) menu.addEventListener("click", () => {
       const open = $(".rail").classList.toggle("open");
       menu.setAttribute("aria-expanded", String(open));
     });
+    // A tap on an in-page link (#heading) should close the mobile contents panel.
+    $(".rail").addEventListener("click", (e) => { if (e.target.closest("a")) $(".rail").classList.remove("open"); });
   }
 
-  function buildSubToc(name) {
-    $$(".subtoc").forEach((s) => s.remove());
-    const link = $(`.toc a[href="#${name}"]`);
-    const view = $(`[data-view="${name}"]`);
+  function buildSubToc(link) {
+    const view = $("[data-view]");
     if (!link || !view) return;
     const heads = $$("h2[id]", view);
     if (!heads.length) return;
@@ -91,19 +79,29 @@
     link.parentElement.append(list);
   }
 
-  /* ---------------- glossary popovers ---------------- */
+  /* ---------------- glossary (data in glossary.js) ---------------- */
+  const glossary = new Map((window.BOOK_GLOSSARY || []).map(([id, term, html]) => [id, { term, html }]));
+  const fragment = (html) => { const t = document.createElement("template"); t.innerHTML = html; return t.content; };
+
+  // glossary.html: render every entry so glossary.html#term-x links land on their definition.
+  function initGlossaryPage() {
+    const dl = $("[data-glossary]");
+    if (!dl) return;
+    for (const [id, { term, html }] of glossary) dl.append(el("dt", { id: "term-" + id, text: term }), el("dd", {}, fragment(html)));
+    const target = location.hash && document.getElementById(location.hash.slice(1));
+    if (target) target.scrollIntoView();
+  }
+
   function initTerms() {
     let pop = null;
     const close = () => { if (pop) { pop.remove(); pop = null; } };
     document.addEventListener("click", (e) => {
       const t = e.target.closest(".term");
       if (!t) { if (!e.target.closest(".term-pop")) close(); return; }
-      const dt = document.getElementById("term-" + t.dataset.term);
+      const entry = glossary.get(t.dataset.term);
       close();
-      if (!dt) return;
-      const dd = dt.nextElementSibling;
-      pop = el("div", { class: "term-pop", role: "dialog" }, el("b", { text: dt.textContent }));
-      pop.append(...Array.from(dd.childNodes).map((n) => n.cloneNode(true)));
+      if (!entry) return;
+      pop = el("div", { class: "term-pop", role: "dialog" }, el("b", { text: entry.term }), fragment(entry.html));
       document.body.append(pop);
       const r = t.getBoundingClientRect();
       const left = Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - pop.offsetWidth - 16);
@@ -189,6 +187,49 @@
     go(0);
   }
 
+  /* ---------------- explanations in layers (ADR 0007), shared by tracers and playgrounds ---------------- */
+  // A step is { what, why, deep }: plain words first, why it matters second, then what happens underneath in a
+  // fold-out that stays open across steps once the reader opens it. A step without "what" shows its "deep" (or
+  // "text") directly, for tracers written before the beginner layers.
+  const paras = (text) => text.split("\n\n").map((para) => { const p = el("p"); p.innerHTML = para; return p; });
+  function explainer(container) {
+    let howOpen = false;
+    const layer = (name, text) => el("div", { class: "layer" }, el("span", { class: "layer-name", text: name }), ...paras(text));
+    const block = (s) => {
+      if (!s.what) return paras(s.deep || s.text || "");
+      const parts = [layer("What’s happening", s.what), layer("Why it matters", s.why)];
+      if (s.deep) {
+        const how = el("details", { class: "how" }, el("summary", { text: "How it works underneath" }), ...paras(s.deep));
+        how.open = howOpen;
+        how.addEventListener("toggle", () => {
+          howOpen = how.open;
+          // Several moves can be shown at once; keep their fold-outs in step.
+          $$("details.how", container).forEach((d) => { if (d.open !== howOpen) d.open = howOpen; });
+        });
+        parts.push(how);
+      }
+      return parts;
+    };
+    return {
+      // One or more steps, in order. Several appear when one action causes more than one move.
+      show: (...steps) => container.replaceChildren(...steps.map((s) => el("div", { class: "step-block" }, ...block(s)))),
+      note: (html) => container.replaceChildren(...paras(html)),
+    };
+  }
+
+  // A playground's explanations live in its page as <script type="application/json" data-narration>, keyed by move:
+  // { "move": { "what": "…{t}…", "why": "…", "deep": "…" } }. narrate(key, vars) fills the {placeholders}.
+  // check-snippets.mjs verifies every key passed to a playground's narrate() has an entry with all three layers.
+  function narration(box) {
+    const spec = JSON.parse($("script[data-narration]", box).textContent);
+    const fill = (text, vars) => text.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : (console.warn("narration: no value for", m), m)));
+    return (key, vars) => {
+      const n = spec[key];
+      if (!n) { console.warn("narration: no entry for", key); return { what: key, why: "" }; }
+      return { what: fill(n.what, vars), why: fill(n.why, vars), deep: n.deep && fill(n.deep, vars) };
+    };
+  }
+
   /* ---------------- request / startup tracer ---------------- */
   function initTracer(box) {
     const spec = JSON.parse($("script[type='application/json']", box).textContent);
@@ -211,16 +252,17 @@
     const packet = el("div", { class: "packet", "aria-hidden": "true" });
     lanesBox.append(packet);
 
-    // Optional per-step "deep" text: what is happening underneath the one-line note.
-    let deep = null;
-    if (spec.scenarios.some((sc) => sc.steps.some((st) => st.deep))) {
-      deep = el("div", { class: "deep", "aria-live": "polite" });
-      result.before(el("div", { class: "deep-box" }, el("span", { class: "label", text: "Under the hood" }), deep));
+    // Optional per-step explanation panel (see explainer). Tracers without "what" label it "Under the hood".
+    let ex = null;
+    const layered = spec.scenarios.some((sc) => sc.steps.some((st) => st.what));
+    if (layered || spec.scenarios.some((sc) => sc.steps.some((st) => st.deep))) {
+      const deep = el("div", { class: "deep", "aria-live": "polite" });
+      result.before(layered ? el("div", { class: "deep-box" }, deep)
+        : el("div", { class: "deep-box" }, el("span", { class: "label", text: "Under the hood" }), deep));
+      ex = explainer(deep);
     }
-    const showDeep = (text) => {
-      if (!deep) return;
-      deep.replaceChildren(...text.split("\n\n").map((para) => { const p = el("p"); p.innerHTML = para; return p; }));
-    };
+    const showDeep = (text) => { if (ex) ex.note(text); };
+    const showStep = (s) => { if (ex) ex.show(s); };
 
     let scenario = spec.scenarios[0];
     let i = 0;
@@ -240,7 +282,9 @@
       result.innerHTML = "";
       reqBox.textContent = scenario.request;
       progress.textContent = `0 / ${scenario.steps.length}`;
-      showDeep("Press <b>Step</b> to go one step at a time. Each step explains what is happening underneath it.");
+      showDeep(layered
+        ? "Press <b>Step</b> to go one step at a time. Each step says what is happening in plain words and why it matters. Open <b>How it works underneath</b> for the full detail."
+        : "Press <b>Step</b> to go one step at a time. Each step explains what is happening underneath it.");
       stepBtn.disabled = false; playBtn.disabled = false;
       movePacket(scenario.steps[0].lane);
     };
@@ -259,7 +303,7 @@
       movePacket(s.lane);
       if (s.fail) packet.classList.add("fail");
       if (s.log) appendLog(s.log, s.fail ? "fail" : "");
-      showDeep(s.deep || s.text);
+      showStep(s);
       i++;
       progress.textContent = `${i} / ${scenario.steps.length}`;
       if (i === scenario.steps.length) finish();
@@ -293,7 +337,6 @@
     stepBtn.addEventListener("click", () => { stop(); step(); });
     resetBtn.addEventListener("click", reset);
     window.addEventListener("resize", () => movePacket(scenario.steps[Math.max(0, i - 1)].lane));
-    box.closest("[data-view]").addEventListener("viewshown", reset);
     reset();
   }
 
@@ -310,6 +353,8 @@
   }
 
   /* ---------------- quizzes ---------------- */
+  // Answers are stored per quiz ("quiz.<id>"). Each quiz also stores its score ("quizscore.<id>") so the contents
+  // rail on other pages can show it without knowing the answer key.
   const quizListeners = [];
   function quizScore(id) {
     const box = $(`.quiz[data-quiz="${id}"]`);
@@ -318,7 +363,9 @@
     const answers = store.get("quiz." + id, {});
     let answered = 0, right = 0;
     qs.forEach((q, idx) => { if (answers[idx]) { answered++; if (answers[idx] === q.dataset.answer) right++; } });
-    return { total: qs.length, answered, right };
+    const score = { total: qs.length, answered, right };
+    store.set("quizscore." + id, score);
+    return score;
   }
   function initQuiz(box) {
     const id = box.dataset.quiz;
@@ -371,8 +418,11 @@
   function initScores() {
     const paint = () => {
       $$("[data-score]").forEach((node) => {
-        const s = quizScore(node.dataset.score);
-        if (!s) return;
+        const id = node.dataset.score;
+        const total = Number(node.dataset.total);
+        // The quiz on this page is the live source; others use the score saved when that page was last opened.
+        const saved = store.get("quizscore." + id, null);
+        const s = quizScore(id) || (saved && saved.total === total ? saved : { total, answered: 0, right: 0 });
         node.textContent = s.answered ? `${s.right}/${s.total}` : `quiz 0/${s.total}`;
       });
     };
@@ -634,9 +684,218 @@
     run();
   }
 
+  /* ---------------- playground: two transactions racing for one balance ---------------- */
+  // Mirrors PostgreSQL READ COMMITTED: a read sees committed postings plus the transaction's own; an INSERT stays
+  // invisible to the other transaction until COMMIT. With the lock, a second FOR NO KEY UPDATE waits for COMMIT.
+  function initRace(box) {
+    const lock = $("#race-lock", box);
+    const log = $(".printout", box);
+    const verdict = $(".verdict", box);
+    const committedOut = $("[data-out=committed]", box);
+    const holderOut = $("[data-out=holder]", box);
+    const cols = $$(".tx", box).map((c) => ({ list: $(".tx-steps", c), seen: $(".seen", c), btn: $("button", c) }));
+    const START = 1000, SPEND = 1000;
+    const cents = (c) => (c < 0 ? "−" : "") + "$" + (Math.abs(c) / 100).toFixed(2);
+    const LABEL = {
+      begin: "BEGIN",
+      lock: "SELECT … FROM account WHERE id = A FOR NO KEY UPDATE",
+      read: "SELECT SUM(amount_minor) FROM posting WHERE account_id = A",
+      check: "balance − $10.00 ≥ 0 ?",
+      insert: "INSERT postings: A −1000, B +1000",
+      commit: "COMMIT",
+    };
+    const ex = explainer($("[data-out=explain]", box));
+    const line = narration(box);
+    const timeline = $("[data-out=timeline]", box);
+    let committed, holder, tx, timer;
+    let notes = [];
+    // Timeline: one column per moment (one button press or Play tick). `events` are cells; `balances[c]` is A's
+    // committed balance at the end of moment c. A commit and the wake-up it causes share a moment.
+    let clock, events, balances;
+    const mark = (t, text, cls, sub = "") => { const e = { at: clock, n: t.n, text, sub, cls }; events.push(e); return e; };
+    const plan = () => (lock.checked ? ["begin", "lock", "read", "check", "insert", "commit"] : ["begin", "read", "check", "insert", "commit"]);
+    const over = (t) => t.state === "done" || t.state === "rolledback";
+
+    const say = (t, text, cls) => { log.append(el("span", cls ? { class: cls } : {}, `T${t.n}  ${text}\n`)); log.scrollTop = log.scrollHeight; };
+    const otherOf = (t) => tx.find((o) => o !== t);
+    // Explain a move in layers, using the entry for `key` in the page's narration. Shown above the SQL log.
+    const narrate = (t, key) => notes.push(line(key, {
+      t: `T${t.n}`, o: `T${otherOf(t).n}`, holder: holder ? `T${holder}` : "",
+      seen: t.seen === null ? "" : cents(t.seen), balance: cents(committed),
+    }));
+    const finish = (t, state) => {
+      t.state = state;
+      if (holder === t.n) {
+        holder = null;
+        // Releasing the lock wakes the waiting transaction: its SELECT ... FOR NO KEY UPDATE returns now.
+        const other = tx.find((o) => o.state === "waiting");
+        if (other) advance(other);
+      }
+    };
+    function advance(t) {
+      if (over(t)) return false;
+      const step = plan()[t.i];
+      const o = otherOf(t);
+      // Each narrate() call names its key literally, so check-snippets.mjs can find it.
+      if (step === "begin") {
+        say(t, "BEGIN");
+        mark(t, "BEGIN", "");
+        narrate(t, "begin");
+      } else if (step === "lock") {
+        if (holder && holder !== t.n) {
+          if (t.state !== "waiting") {
+            t.state = "waiting"; t.waitFrom = clock; say(t, `${LABEL.lock}  … waits: T${holder} holds the lock`, "fail");
+            mark(t, "LOCK?", "wait", "waits");
+            narrate(t, "lock-waits");
+          }
+          return false;
+        }
+        const waited = t.state === "waiting";
+        if (waited) t.waits.push([t.waitFrom, clock]);
+        holder = t.n; t.state = "ready";
+        say(t, `${LABEL.lock}  → granted`);
+        mark(t, "LOCK", "lock", waited ? "granted" : "");
+        if (waited) narrate(t, "lock-granted-after-wait"); else narrate(t, "lock-granted");
+      } else if (step === "read") {
+        // READ COMMITTED: committed rows plus this transaction's own uncommitted ones.
+        t.seen = committed + t.pending;
+        say(t, `${LABEL.read}  → ${t.seen}`);
+        t.readEvent = mark(t, "READ", "read", cents(t.seen));
+        if (o.pending) narrate(t, "read-hidden");
+        else if (committed < START) narrate(t, "read-after-commit");
+        else narrate(t, "read");
+      } else if (step === "check") {
+        if (t.seen - SPEND < 0) {
+          say(t, `${cents(t.seen)} is not enough → InsufficientFundsException → ROLLBACK, 409`, "fail");
+          mark(t, "REFUSE", "refuse", "409");
+          narrate(t, "check-refuse");
+          t.i++; finish(t, "rolledback"); return true;
+        }
+        say(t, `${cents(t.seen)} − $10.00 = ${cents(t.seen - SPEND)} → allowed`);
+        mark(t, "CHECK", "", "ok");
+        if (lock.checked) narrate(t, "check-pass-locked"); else narrate(t, "check-pass-unlocked");
+      } else if (step === "insert") {
+        t.pending = -SPEND;
+        say(t, `${LABEL.insert}  (visible only to T${t.n} until COMMIT)`);
+        mark(t, "INSERT", "", "−$10.00");
+        narrate(t, "insert");
+      } else if (step === "commit") {
+        committed += t.pending; t.pending = 0;
+        say(t, `COMMIT → everyone now sees A = ${cents(committed)}`, "ok");
+        mark(t, "COMMIT", committed < 0 ? "bad" : "ok");
+        // The other transaction read the balance and is still running: what it read is now out of date.
+        if (o.readEvent && !over(o)) { o.readEvent.cls = "stale"; o.readEvent.title = `Out of date: T${t.n} committed after this read`; }
+        // A lock and an overdraft can't both happen: the lock is what prevents it.
+        if (committed < 0) narrate(t, "commit-overdrawn");
+        else if (holder === t.n) narrate(t, "commit-release");
+        else narrate(t, "commit");
+        t.i++; finish(t, "done"); return true;
+      }
+      t.i++;
+      return true;
+    }
+
+    function renderTimeline() {
+      if (!timeline) return;
+      if (!clock) {
+        timeline.replaceChildren(el("caption", { text: "Moves appear here, one column per moment." }));
+        return;
+      }
+      const moments = Array.from({ length: clock }, (_, k) => k + 1);
+      const head = el("tr", {}, el("th", { scope: "col", text: "Moment" }), ...moments.map((c) => el("th", { scope: "col", text: String(c) })));
+      const rows = tx.map((t) => el("tr", {}, el("th", { scope: "row", text: `T${t.n}` }), ...moments.map((c) => {
+        const e = events.find((x) => x.at === c && x.n === t.n);
+        if (e) return el("td", { class: "ev " + e.cls, ...(e.title ? { title: e.title } : {}) }, e.text,
+          ...(e.sub ? [el("small", { text: e.sub })] : []), ...(e.title ? [el("small", { text: "out of date" })] : []));
+        const waiting = t.waits.some(([from, to]) => c > from && c < to) || (t.state === "waiting" && c > t.waitFrom);
+        return el("td", waiting ? { class: "waiting", text: "waits" } : {});
+      })));
+      let prev = START;
+      const bal = el("tr", { class: "balance" }, el("th", { scope: "row", text: "A, committed" }), ...moments.map((c) => {
+        const b = balances[c];
+        const cls = (b !== prev ? "changed " : "") + (b < 0 ? "bad" : "");
+        prev = b;
+        return el("td", { class: cls.trim(), text: cents(b) });
+      }));
+      timeline.replaceChildren(el("thead", {}, head), el("tbody", {}, ...rows, bal));
+      const wrap = timeline.parentElement;
+      wrap.scrollLeft = wrap.scrollWidth;
+    }
+
+    function render() {
+      renderTimeline();
+      const steps = plan();
+      tx.forEach((t, k) => {
+        const c = cols[k];
+        c.list.replaceChildren(...steps.map((s, idx) => {
+          let cls = idx < t.i ? "done" : idx === t.i && !over(t) ? (t.state === "waiting" ? "waiting" : "next") : "";
+          if (t.state === "rolledback" && idx === t.i - 1) cls = "failed";
+          return el("li", { class: cls, text: LABEL[s] });
+        }));
+        c.seen.textContent = t.state === "waiting" ? "Waiting inside PostgreSQL for the lock…"
+          : t.state === "done" ? "Committed." : t.state === "rolledback" ? "Rolled back: nothing written."
+          : t.seen === null ? "Hasn't read the balance yet." : `Read the balance as ${cents(t.seen)}.`;
+        c.btn.disabled = over(t) || t.state === "waiting";
+      });
+      if (notes.length) {
+        if (typeof notes[0] === "string") ex.note(notes[0]); else ex.show(...notes);
+        notes = [];
+      }
+      committedOut.textContent = cents(committed);
+      committedOut.parentElement.className = "readout " + (committed < 0 ? "bad" : "");
+      const pending = tx.filter((t) => t.pending).map((t) => `T${t.n} has an uncommitted −$10.00`);
+      holderOut.textContent = [holder ? `Row A locked by T${holder}.` : lock.checked ? "Row A is not locked." : "No locks taken.", ...pending].join(" ");
+      verdict.hidden = !tx.every(over);
+      if (tx.every(over)) {
+        const wins = tx.filter((t) => t.state === "done").length;
+        if (committed < 0) {
+          verdict.className = "verdict leak";
+          verdict.textContent = `Overdrawn: A is ${cents(committed)}. Both transactions read $10.00 before either committed, so both checks passed: in the timeline, both READ cells sit left of the first COMMIT. No database rule fired: each entry balanced on its own.`;
+        } else {
+          verdict.className = "verdict stored";
+          verdict.textContent = `Correct: A is ${cents(committed)}. ${wins} transfer succeeded and the other was refused.` +
+            (lock.checked ? " The lock made the second transaction read the balance only after the first committed." : " This order was safe only because T1 finished before T2 read anything. Try “take turns”.");
+        }
+      }
+    }
+    const reset = () => {
+      clearInterval(timer); timer = null;
+      committed = START; holder = null;
+      clock = 0; events = []; balances = [];
+      tx = [1, 2].map((n) => ({ n, i: 0, seen: null, pending: 0, state: "ready", waits: [], waitFrom: null, readEvent: null }));
+      log.replaceChildren();
+      notes = ["Press <b>Step T1</b> or <b>Step T2</b> to move one transaction forward, or press a Play button. Each move says what is happening in plain words and why it matters. Open <b>How it works underneath</b> to see what PostgreSQL is doing."];
+      $$("[data-order]", box).forEach((b) => b.setAttribute("aria-pressed", "false"));
+      render();
+    };
+    // One moment: a button press or a Play tick. Everything it causes lands in the same timeline column.
+    const moment = (fn) => { clock++; fn(); balances[clock] = committed; render(); };
+    const play = (order, chip) => {
+      reset();
+      chip.setAttribute("aria-pressed", "true");
+      let turn = 0;
+      const tick = () => {
+        if (tx.every(over)) { clearInterval(timer); timer = null; return; }
+        const preferred = order === "serial" ? tx.find((t) => !over(t)) : tx[turn % 2];
+        const other = tx.find((t) => t !== preferred && !over(t));
+        moment(() => { if (!advance(preferred) && other) advance(other); });
+        turn++;
+      };
+      tick();
+      timer = setInterval(tick, reducedMotion() ? 1300 : 900);
+    };
+    cols.forEach((c, k) => c.btn.addEventListener("click", () => { clearInterval(timer); timer = null; moment(() => advance(tx[k])); }));
+    $$("[data-order]", box).forEach((b) => b.addEventListener("click", () => play(b.dataset.order, b)));
+    $("[data-reset]", box).addEventListener("click", reset);
+    lock.addEventListener("change", reset);
+    reset();
+  }
+
   /* ---------------- boot ---------------- */
   function boot() {
+    if (redirectOldLink()) return;
     initTheme();
+    initGlossaryPage();
     $$("figure.code").forEach(initCode);
     $$(".tracer").forEach(initTracer);
     $$(".quiz").forEach(initQuiz);
@@ -648,8 +907,9 @@
     $$("[data-playground=layers]").forEach(initLayers);
     $$("[data-playground=micros]").forEach(initMicros);
     $$("[data-playground=cache]").forEach(initCache);
+    $$("[data-playground=race]").forEach(initRace);
     $$(".explorer").forEach(initExplorer);
-    initRouter();
+    initNav();
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();

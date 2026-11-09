@@ -19,6 +19,7 @@ class CapabilitiesControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.paymentProcessingEnabled").value(false))
             .andExpect(jsonPath("$.accountsEnabled").value(true))
-            .andExpect(jsonPath("$.chapter").value(2));
+            .andExpect(jsonPath("$.ledgerEnabled").value(true))
+            .andExpect(jsonPath("$.chapter").value(3));
     }
 }

@@ -1,0 +1,947 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chapter 3 · P2P Payments Lab Textbook</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<link rel="stylesheet" href="book.css">
+</head>
+<body>
+<!--
+  The interactive edition of docs/chapters/*.md.
+  Code excerpts inside <figure class="code"> must match the real source file named in data-source;
+  docs/book/tools/check-snippets.mjs enforces this in CI. Edit both in the same commit.
+-->
+<div class="topbar">
+  <b>P2P Payments Lab</b>
+  <button class="btn ghost" type="button" aria-expanded="false" aria-controls="rail">Contents</button>
+</div>
+<div class="shell">
+  <nav class="rail" id="rail" aria-label="Book contents">
+    <a class="brand" href="index.html"><span>Living textbook</span><b>P2P Payments Lab</b></a>
+    <ul class="toc">
+      <li><a href="index.html"><span class="no">00</span><span>How to use this book</span></a></li>
+      <li><a href="ch-01.html"><span class="no">01</span><span>Runnable service</span><span class="score" data-score="ch-01" data-total="6"></span></a></li>
+      <li><a href="ch-02.html"><span class="no">02</span><span>Accounts</span><span class="score" data-score="ch-02" data-total="10"></span></a></li>
+      <li><a href="hood.html"><span class="no">UH</span><span>Under the hood</span><span class="score" data-score="hood" data-total="10"></span></a></li>
+      <li><a href="ch-03.html"><span class="no">03</span><span>Ledger and concurrency</span><span class="score" data-score="ch-03" data-total="10"></span></a></li>
+      <li><a href="glossary.html"><span class="no">Gl</span><span>Glossary</span></a></li>
+    </ul>
+    <ul class="toc pending" aria-label="Planned chapters">
+      <li><span class="toc-planned">04 · Payments and idempotency</span></li>
+      <li><span class="toc-planned">05 · Authentication</span></li>
+      <li><span class="toc-planned">06 · Kafka and the outbox</span></li>
+    </ul>
+    <div class="rail-foot">
+      <div class="theme-toggle" role="group" aria-label="Theme">
+        <button type="button" data-mode="system">Auto</button>
+        <button type="button" data-mode="light">Light</button>
+        <button type="button" data-mode="dark">Dark</button>
+      </div>
+      <div>Fictional platform. No real money, banks or rails. Quiz answers are saved only in this browser.</div>
+    </div>
+  </nav>
+
+  <main>
+  <!-- ================================================================ CHAPTER 3 -->
+  <section class="view" data-view="ch-03">
+    <div class="prose">
+      <p class="eyebrow">Chapter 3</p>
+      <h1>A ledger that can't lose a cent, even under a crowd</h1>
+      <p class="lede">Money can finally move. This chapter is about the two ways moving money goes wrong: a transfer that only half happens, and two transfers that each think they're the only one. You'll break both on purpose, then watch PostgreSQL stop them.</p>
+      <div class="objectives">
+        <span class="label">You will be able to</span>
+        <ul>
+          <li>explain <button class="term" data-term="double-entry">double-entry</button> bookkeeping, and why "every entry sums to zero" means money is never created or destroyed;</li>
+          <li>say what <button class="term" data-term="atomicity">atomicity</button> guarantees and which line of code provides it;</li>
+          <li>reproduce a <button class="term" data-term="race-condition">race condition</button> that overdraws an account, and explain why no single check catches it;</li>
+          <li>fix it with a <button class="term" data-term="row-lock">row lock</button>, and say why the lock must come <em>before</em> the balance read;</li>
+          <li>explain a <button class="term" data-term="deadlock">deadlock</button> that the obvious lock causes, and the lock mode that avoids it;</li>
+          <li>describe what happens when 1,000 requests arrive at once: where they queue, and what limits throughput.</li>
+        </ul>
+      </div>
+      <div class="callout"><p><b>How to read this chapter.</b> Each section starts with the idea in a few sentences. The tracers, the playground and the <b>Under the hood</b> boxes go deeper. Every log line, error and number was recorded from this project's running service on 30 October 2026, or from its tests; most are abridged (timestamps and package names shortened), and the captions say so.</p></div>
+
+      <details class="reveal primer"><summary>New to backend work? Start here: six ideas this chapter builds on</summary><div>
+        <p>Each idea below has three parts: what it is, why this chapter needs it, and where you'll see it. Every tracer step in this chapter uses the same pattern, with the full technical detail one click further down.</p>
+        <dl>
+          <dt>1 · A request runs on a thread</dt>
+          <dd><p><b>What:</b> when a program calls our API, the web server (Tomcat, built into the app) hands that request to one <b>worker thread</b>. A thread is one independent line of work: it runs our Java code for that request from start to finish.</p>
+          <p><b>Why:</b> the server has up to 200 threads, so up to 200 requests run <em>at the same time</em>. That's why two transfers from the same account can overlap.</p>
+          <p><b>Where:</b> the thread's name is in every log line, like <code>[nio-8080-exec-7]</code>. Two different names means two requests running side by side.</p></dd>
+
+          <dt>2 · A transaction is all-or-nothing</dt>
+          <dd><p><b>What:</b> a <button class="term" data-term="transaction">transaction</button> groups several database changes. It starts with <code>BEGIN</code>. It ends with either <code>COMMIT</code>, which saves everything at once, or <code>ROLLBACK</code>, which throws everything away.</p>
+          <p><b>Why:</b> a transfer writes three rows. If the app crashed halfway, a transaction guarantees that none of them count, so money can't half-move.</p>
+          <p><b>Where:</b> <code>@Transactional</code> on <code>LedgerService.transfer</code>. Spring begins the transaction before the method runs. It commits when the method returns normally, and rolls back if the method throws an exception.</p></dd>
+
+          <dt>3 · Unsaved changes are invisible to others</dt>
+          <dd><p><b>What:</b> until a transaction commits, its new rows can be seen only by itself. PostgreSQL's default rule, called READ COMMITTED, is that each SQL statement sees everything that was committed before that statement started.</p>
+          <p><b>Why:</b> this is how two transfers can both see Alice's $10.00. Neither can see the other's debit, because neither has committed yet.</p>
+          <p><b>Where:</b> the race playground. Watch the "uncommitted −$10.00" that the other transaction can't see.</p></dd>
+
+          <dt>4 · A lock makes others wait their turn</dt>
+          <dd><p><b>What:</b> a <button class="term" data-term="row-lock">row lock</button> is a claim on one database row. Another transaction that asks for a conflicting lock on that row waits until the first transaction ends. Locks are released automatically at <code>COMMIT</code> or <code>ROLLBACK</code>.</p>
+          <p><b>Why:</b> it turns "at the same time" into "one after the other" for exactly the thing that mustn't overlap: decisions about one account's money.</p>
+          <p><b>Where:</b> <code>SELECT … FOR NO KEY UPDATE</code> on the paying account's row, in <code>JpaLedgerRepository.lockForDebit</code>.</p></dd>
+
+          <dt>5 · An exception means "stop and refuse"</dt>
+          <dd><p><b>What:</b> Java code refuses by <b>throwing</b> an exception: an object describing the problem. The method stops at that line, and the exception travels up to whichever code called it, until something catches it.</p>
+          <p><b>Why:</b> when an exception leaves a <code>@Transactional</code> method, Spring rolls the transaction back. Then an exception handler turns it into an HTTP answer for the client.</p>
+          <p><b>Where:</b> <code>InsufficientFundsException</code> becomes <code>409 Conflict</code> in <code>LedgerExceptionHandler</code>. Step through the <b>Overdraft</b> scenario in the tracer.</p></dd>
+
+          <dt>6 · HTTP status codes summarize the outcome</dt>
+          <dd><p><b>What:</b> every HTTP answer starts with a three-digit code. 2xx means success, 4xx means the request was refused, 5xx means the server failed.</p>
+          <p><b>Why:</b> programs, and retries, act on the code before reading anything else. "Refused, don't retry" (400) is a different message from "refused, might work later" (409).</p>
+          <p><b>Where:</b> this chapter uses <code>201 Created</code>, <code>400 Bad Request</code>, <code>404 Not Found</code> and <code>409 Conflict</code>.</p></dd>
+        </dl>
+      </div></details>
+
+      <h2 id="c3-model" data-short="Double entry">Mental model: money moves, it never appears</h2>
+      <p>Picture a jar of marbles for every account. A transfer takes marbles out of one jar and puts the same number in another. If you count every marble in every jar, the total never changes. That's the whole idea of <button class="term" data-term="double-entry">double-entry</button> bookkeeping, used by accountants for 500 years.</p>
+      <p>In this project each movement is a <button class="term" data-term="journal-entry">journal entry</button> made of two or more <button class="term" data-term="posting">postings</button>. A posting is a signed amount for one account: negative takes money out, positive puts it in. The rule that makes it double-entry: <b>the postings of an entry always add up to zero</b>.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Journal entry</th><th>Posting</th><th>Account</th><th>amount_minor</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="2">FUNDING (Alice gets $10.00)</td><td>1</td><td>Simulated funding source</td><td><code>-1000</code></td></tr>
+          <tr><td>2</td><td>Alice</td><td><code>+1000</code></td></tr>
+          <tr><td rowspan="2">TRANSFER (Alice pays Bob $3.00)</td><td>1</td><td>Alice</td><td><code>-300</code></td></tr>
+          <tr><td>2</td><td>Bob</td><td><code>+300</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>Alice's balance is the sum of her postings: <code>1000 - 300 = 700</code>. Nothing stores "700"; it's computed every time, exactly as Chapter 2 promised.</p>
+      <p>So where did Alice's first $10.00 come from? From the <button class="term" data-term="funding-account">funding account</button>, a special account seeded by the migration. It's the only account allowed to go negative. Its balance is minus the total money ever issued, so <b>the sum over the entire ledger is always exactly zero</b>. That gives you a one-line audit. This is real output from the lab database after every experiment in this chapter:</p>
+      <div class="evidence"><pre class="printout">p2p_lab=# SELECT SUM(amount_minor) AS whole_ledger, count(*) AS postings FROM posting;
+ whole_ledger | postings
+--------------+----------
+            0 |     3322</pre></div>
+      <details class="reveal"><summary>Under the hood: how signed amounts map to "debit" and "credit"</summary><div>
+        <p>Accounting textbooks don't use signs. They write every amount as positive in one of two columns, <button class="term" data-term="debit-credit">debit</button> or <button class="term" data-term="debit-credit">credit</button>, and the rule is "total debits = total credits".</p>
+        <p>Which column increases a balance depends on the kind of account. That's why "credit" means "money in" on your bank statement, while the bank's own books call the same event a credit to a <em>liability</em>: the bank owes you more.</p>
+        <p>This project uses one signed column instead: negative for money out of an account, positive for money in, from the account holder's point of view. "Debits equal credits" becomes <code>SUM(amount_minor) = 0</code>, which a database can check in one query. In this book and in the code, a <b>debit</b> is a negative posting and a <b>credit</b> is a positive one. <a href="https://github.com/cookmcbook/p2p-payments-lab/blob/main/docs/adr/0005-double-entry-ledger.md">ADR 0005</a> records the trade-off.</p>
+      </div></details>
+
+      <h2 id="c3-atomic" data-short="Atomicity">Atomicity: both postings, or neither</h2>
+      <p>A transfer writes three rows: the entry and two postings. Suppose the app crashed after writing Alice's <code>-300</code> but before Bob's <code>+300</code>. Three dollars would vanish.</p>
+      <p><button class="term" data-term="atomicity">Atomicity</button> is the guarantee that this can't happen. All the writes in one <button class="term" data-term="transaction">transaction</button> become visible together at <code>COMMIT</code>, or none of them do. PostgreSQL provides it: until <code>COMMIT</code>, the new rows exist only for the transaction that wrote them, and if the connection dies first, PostgreSQL throws them away.</p>
+      <p>In Java it's the same <code>@Transactional</code> you met in Chapter 2. <code>LedgerService.transfer</code> is one transaction: the checks, the entry and both postings commit together, or roll back together.</p>
+      <p>The rules are enforced twice, the same defense in depth as Chapter 2:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Rule</th><th>Java (<code>JournalEntry</code>)</th><th>PostgreSQL (<code>V3__ledger.sql</code>)</th></tr></thead>
+        <tbody>
+          <tr><td>Postings sum to zero</td><td>Constructor refuses to build it</td><td><button class="term" data-term="deferred-constraint">Deferred</button> <button class="term" data-term="trigger">trigger</button> checks at <code>COMMIT</code></td></tr>
+          <tr><td>At least two postings</td><td>Constructor</td><td>Same trigger</td></tr>
+          <tr><td>No zero amounts</td><td><code>Posting</code> constructor</td><td><code>CHECK (amount_minor &lt;&gt; 0)</code></td></tr>
+          <tr><td>History is never edited</td><td>Records are immutable; no update method exists</td><td>Triggers reject <code>UPDATE</code>, <code>DELETE</code>, <code>TRUNCATE</code></td></tr>
+          <tr><td>Customer balance ≥ 0</td><td><code>LedgerAccount.checkDebit</code></td><td><b>Not possible with a constraint.</b> The next section shows why.</td></tr>
+        </tbody>
+      </table></div>
+      <p>Here's the database refusing a one-sided entry that bypasses Java entirely. Each <code>INSERT</code> is accepted; the trigger waits for <code>COMMIT</code>, when the whole entry is visible:</p>
+      <div class="evidence"><pre class="printout">p2p_lab=# BEGIN;
+p2p_lab=*# INSERT INTO journal_entry (id, kind, created_at) VALUES (gen_random_uuid(), 'FUNDING', now()) RETURNING id \gset
+INSERT 0 1
+p2p_lab=*# INSERT INTO posting VALUES (gen_random_uuid(), :'id', '31e03d5c-…', 1000000, 'USD');
+INSERT 0 1
+p2p_lab=*# COMMIT;
+<span class="hl">ERROR:  journal entry 24cab6b9-8f93-48bb-ac34-ae2ce64323e9 is unbalanced: 1 postings summing to 1000000</span>
+CONTEXT:  PL/pgSQL function ledger_check_entry_balanced() line 10 at RAISE
+
+p2p_lab=# UPDATE posting SET amount_minor = 1000000 WHERE account_id = '31e03d5c-…';
+<span class="hl">ERROR:  ledger is append-only: UPDATE on posting is not allowed</span>
+p2p_lab=# DELETE FROM posting;
+<span class="hl">ERROR:  ledger is append-only: DELETE on posting is not allowed</span></pre></div>
+      <p class="fig-cap">Recorded with <code>psql -a</code>. The prompts were added, the account id is shortened, and stderr was merged back into its place in the output.</p>
+
+      <h2 id="c3-trace" data-short="Transfer trace">Following one transfer</h2>
+      <p>The lab endpoints exist only with the <code>lab</code> <button class="term" data-term="profile">Spring profile</button>, switched on by <code>infra/compose.lab.yaml</code>. They have no login and no <button class="term" data-term="idempotency">idempotency</button> (that's Chapter 4), so never deploy them. Step through a transfer and watch the order of the SQL: the lock, then the balance, then (only at commit) the inserts.</p>
+    </div>
+
+    <div class="fig tracer">
+      <div class="fig-head"><h4>A transfer through the ledger</h4><div class="chips" aria-label="Scenario"></div></div>
+      <div class="fig-body stage">
+        <ol class="lanes"></ol>
+        <div class="side">
+          <div><span class="label">Request</span><pre class="printout request"></pre></div>
+          <div><span class="label">Server log and SQL (recorded, abridged)</span><pre class="printout" aria-live="polite"></pre></div>
+          <div class="result" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="controls"><div class="row"><button class="btn" type="button">Play</button><button class="btn ghost" type="button">Step</button><button class="btn ghost" type="button">Reset</button></div><span class="progress"></span></div>
+      <script type="application/json">
+      {
+        "lanes": [
+          {"name": "Client", "detail": "curl / race.mjs"},
+          {"name": "Tomcat + DispatcherServlet", "detail": "routing"},
+          {"name": "Binding & validation", "detail": "Jackson, @Valid"},
+          {"name": "LabLedgerController", "detail": "ledger.api, lab profile only"},
+          {"name": "LedgerService", "detail": "@Transactional"},
+          {"name": "JournalEntry, LedgerAccount", "detail": "ledger.domain"},
+          {"name": "JpaLedgerRepository", "detail": "ledger.persistence"},
+          {"name": "PostgreSQL", "detail": "V3__ledger.sql"}
+        ],
+        "scenarios": [
+          {"label": "Transfer $3.00", "request": "POST /lab/ledger/transfers HTTP/1.1\nContent-Type: application/json\n\n{\"fromAccountId\":\"31e03d5c-…\",   (Alice, balance $10.00)\n \"toAccountId\":\"e36785e7-…\",     (Bob)\n \"amountMinor\":300,\"currency\":\"USD\"}",
+           "steps": [
+             {"lane": 0, "text": "Alice asks to send $3.00 (300 cents) to Bob.",
+              "what": "A program sends our server an HTTP request: a short text message with an address (<code>/lab/ledger/transfers</code>) and a JSON body saying who pays whom, and how much. Here the program is <code>curl</code>, a command-line tool for sending web requests.",
+              "why": "Everything after this is the server's job: move this money exactly once, completely, and only if Alice has it.",
+              "deep": "The amount travels as an integer number of cents, never as <code>3.00</code>, for the reasons in Chapter 2.\n\nThis path exists only because the stack was started with <code>-f infra/compose.lab.yaml</code>, which sets <code>SPRING_PROFILES_ACTIVE=lab</code>. Without it, Spring never creates <code>LabLedgerController</code>, and the same request gets a 404."},
+             {"lane": 1, "text": "The path matches LabLedgerController.transfer().",
+              "what": "The server reads the address and looks up which Java method handles it. Think of a receptionist reading an envelope and passing it to the right desk.",
+              "why": "If no method claims the address, the answer is 404 Not Found. That is what happens when lab mode is off, so this is also where \"is this feature switched on?\" is decided.", "log": "[nio-8080-exec-7] DispatcherServlet : POST \"/lab/ledger/transfers\", parameters={}\n[nio-8080-exec-7] RequestMappingHandlerMapping : Mapped to dev.p2plab.payments.ledger.api.LabLedgerController#transfer(TransferRequest)",
+              "deep": "At startup Spring checked the <code>@Profile(\"lab\")</code> annotation on the controller class, found the profile active, and created the bean. It also logged a warning, which is the first thing to look for if you're unsure which mode you're in:\n\n<code>WARN … LabLedgerController : lab profile active: /lab/ledger endpoints move simulated money WITHOUT authentication; local use only</code>"},
+             {"lane": 2, "text": "Jackson builds a TransferRequest. @Positive, @Max(100_000_000) and @Pattern(\"USD\") pass.",
+              "what": "The JSON text becomes a Java object, a <code>TransferRequest</code>. Then each field is checked against simple rules: the amount is above zero and at most $1,000,000, and the currency is USD.",
+              "why": "Bad input is turned away here, cheaply, before the database is touched. A negative amount, for example, would otherwise mean \"take money from Bob\".", "log": "[nio-8080-exec-7] RequestResponseBodyMethodProcessor : Read \"application/json;charset=UTF-8\" to [TransferRequest[fromAccountId=31e03d5c-7b72-4cc8-b5f7-230c6146ab23, toAccountId=e36785e7-b21b-4722-a (truncated)...]",
+              "deep": "<code>@Positive</code> rejects 0 and negatives here, before any transaction starts. A negative transfer would otherwise mean \"pull money from Bob\".\n\nThe <code>@Max</code> cap of $1,000,000.00 keeps lab amounts far from the limit of a <code>long</code>. Overflow would still fail loudly in <code>Money.plus</code>, but a validation error is a clearer answer."},
+             {"lane": 3, "text": "The controller wraps 300 in Money(300, USD) and calls ledger.transfer(). Nothing else.",
+              "what": "The controller is the thin layer between the web and the business rules. It turns the number 300 into a <code>Money</code> value (300 cents, USD) and hands the work to <code>LedgerService</code>.",
+              "why": "Keeping the controller thin puts every money rule in one place, the service, where it can be tested without a web server.",
+              "deep": "As in Chapter 2, <code>ledger</code> holds Spring's generated <a href=\"hood.html#h-proxy\">proxy</a>, not the <code>LedgerService</code> you wrote. The proxy is where the transaction begins."},
+             {"lane": 4, "text": "The proxy opens a transaction. Its isolation level is the database default: READ COMMITTED.",
+              "what": "Before any of the service's code runs, Spring starts a database <b>transaction</b>: a group of database steps that either all take effect or none do. READ COMMITTED is the rule for what this transaction can see: only data that other transactions have finished saving.",
+              "why": "A transfer writes three rows. If only some were saved, money would vanish or appear from nowhere. The transaction makes the transfer all-or-nothing.", "log": "[nio-8080-exec-7] JpaTransactionManager : Creating new transaction with name [dev.p2plab.payments.ledger.application.LedgerService.transfer]: PROPAGATION_REQUIRED,ISOLATION_DEFAULT\n[nio-8080-exec-7] TransactionImpl : begin",
+              "deep": "<code>ISOLATION_DEFAULT</code> means \"whatever the database uses\", which for PostgreSQL is <button class=\"term\" data-term=\"isolation\">READ COMMITTED</button>. In READ COMMITTED, every SQL statement sees the rows committed before <em>that statement</em> started, plus the transaction's own uncommitted rows.\n\nThat per-statement freshness is exactly what the lock below relies on."},
+             {"lane": 5, "text": "JournalEntry.move() builds two postings, Alice -300 and Bob +300. The constructor adds them up: zero, so the entry may exist.",
+              "what": "The service builds the transfer in memory as two lines: \"Alice −300\" and \"Bob +300\". Each line is a <b>posting</b>, and together they are a <b>journal entry</b>. The code adds the lines up and refuses to continue unless the total is exactly 0.",
+              "why": "If the lines always add up to zero, money is only ever moved, never created or destroyed. Checking in Java gives a clear error early; the database checks again at the end.",
+              "deep": "Pure Java. The constructor adds the amounts with <code>Math.addExact</code>, which throws on overflow instead of wrapping around. It also rejects fewer than two postings, and an account that appears twice.\n\nIf this object exists, it is balanced. The database will check again at commit."},
+             {"lane": 6, "text": "Accounts are visited in id order. Bob's comes first here: the repository checks that it exists. No lock, because a credit can only add money.",
+              "what": "The code now visits each account in the entry, always in the same order (sorted by account id). Bob happens to come first. For Bob it only asks the database: does this account exist, and what currency is it?",
+              "why": "Bob is receiving money, and receiving can't push a balance below zero, so there is nothing to protect. The fixed order matters later: it stops two transfers from blocking each other forever.", "log": "[nio-8080-exec-7] SQL : SELECT currency, kind FROM account WHERE id = ?\n[nio-8080-exec-7] bind : binding parameter (1:UUID) <- [e36785e7-b21b-4722-a551-baa568484a45]",
+              "deep": "Why is Bob (<code>e367…</code>) before Alice (<code>31e0…</code>)? Java's <code>UUID.compareTo</code> compares the first 16 hex digits as a <em>signed</em> 64-bit number. A UUID starting with <code>e</code> has its top bit set, so it counts as negative and sorts first.\n\nThe order looks odd, but it's the same in every JVM, and that sameness is what matters. Two entries that touch the same accounts will always lock them in the same sequence."},
+             {"lane": 6, "text": "Alice is being debited, so her account row is locked: SELECT … FOR NO KEY UPDATE. Any other debit of Alice now waits here until this transaction ends.",
+              "what": "Alice is paying, so the code <b>locks</b> her account row. That tells the database: \"I'm deciding something about this account; anyone else who wants to take money from it waits until I'm done.\" It's like a counter that serves one customer at a time.",
+              "why": "Without the lock, two transfers could both look at Alice's $10.00 at the same moment and both decide it's enough. The race section below shows that happening.", "log": "[nio-8080-exec-7] SQL : SELECT currency, kind FROM account WHERE id = ? FOR NO KEY UPDATE\n[nio-8080-exec-7] bind : binding parameter (1:UUID) <- [31e03d5c-7b72-4cc8-b5f7-230c6146ab23]",
+              "deep": "A <button class=\"term\" data-term=\"row-lock\">row lock</button> in PostgreSQL is recorded on the row itself: the locking transaction's id is written into the row's header. Another transaction that asks for a conflicting lock sees that id and goes to sleep until that transaction commits or rolls back. The wait shows as <code>wait_event_type = Lock</code> in <code>pg_stat_activity</code>.\n\nWhy <code>NO KEY</code>? See the deadlock tracer below. Locking a row doesn't change it; plain readers are never blocked."},
+             {"lane": 7, "text": "Only now is Alice's balance read: the sum of her postings. It returns 1000.",
+              "what": "Now, while holding the lock, the code asks for Alice's balance: add up all of her postings. The answer is 1000 cents, $10.00.",
+              "why": "The order is the whole trick. Because the read happens after the lock, nobody else can be halfway through spending Alice's money, so the number is up to date and stays true until this transfer finishes.", "log": "[nio-8080-exec-7] SQL : SELECT COALESCE(SUM(amount_minor), 0) FROM posting WHERE account_id = ?\n[nio-8080-exec-7] bind : binding parameter (1:UUID) <- [31e03d5c-7b72-4cc8-b5f7-230c6146ab23]",
+              "deep": "This is the most important ordering in the chapter. The SUM runs <em>after</em> the lock is granted. Under READ COMMITTED it starts with a fresh <button class=\"term\" data-term=\"mvcc\">snapshot</button>, so it sees every debit that committed while we waited for the lock.\n\nSwap the two statements and the lock is useless: you'd hold a lock on the row while reasoning from a stale balance.\n\nThe log doesn't print the result. The 1000 comes from the balance endpoint, called just before this request."},
+             {"lane": 5, "text": "LedgerAccount.checkDebit(): 1000 + (-300) = 700, not negative. Allowed.",
+              "what": "A plain Java rule: the balance plus this posting must not go below zero. 1000 − 300 = 700, so the transfer is allowed.",
+              "why": "This is \"you can't spend money you don't have\". It lives in the domain code (<code>LedgerAccount</code>), so it can be tested on its own, without a database.",
+              "deep": "The same rule for every customer account: the balance after the posting must not be negative. The funding account has <code>mayGoNegative = true</code>, read from <code>account.kind = 'FUNDING'</code>, so it skips this check."},
+             {"lane": 4, "text": "The service persists the entry and logs it. The INSERTs are queued, not sent; this log line still comes before the commit.",
+              "what": "The service hands the entry and its two postings to Hibernate, the library that turns Java objects into database rows. Hibernate doesn't send them yet; it keeps a to-do list until the transaction ends. Then the service writes a log line.",
+              "why": "The writes go out at the very end, while Alice's lock is still held. So nobody can slip in between our balance check and our write.", "log": "[nio-8080-exec-7] LedgerService : journal entry posted entryId=71d2728d-bbf4-4dac-8fec-8618e23863dd kind=TRANSFER postings=2",
+              "deep": "<code>entityManager.persist</code> adds the three entities to Hibernate's <button class=\"term\" data-term=\"persistence-context\">persistence context</button>. As in Chapter 2, nothing is sent yet: there's no SQL between the SUM and this line."},
+             {"lane": 4, "text": "The method returns, so the proxy commits. Hibernate flushes first.",
+              "what": "The service method returned without an error, so Spring tells the database to <b>commit</b>: make everything from this transaction permanent and visible. Hibernate sends its to-do list first.",
+              "why": "Commit is the single moment the transfer \"happens\". Before it, nobody else can see any of it; after it, everyone sees all of it.", "log": "[nio-8080-exec-7] JpaTransactionManager : Initiating transaction commit\n[nio-8080-exec-7] TransactionImpl : committing"},
+             {"lane": 7, "text": "Three INSERTs, in persist order: the entry, then Alice -300, then Bob +300. At COMMIT the deferred trigger checks that the entry sums to zero.",
+              "what": "Three rows are written: the journal entry and the two postings. At commit, a check built into the database (a <b>trigger</b>) adds the postings up once more and confirms they total zero. Then the rows become visible to everyone, and Alice's lock is released.",
+              "why": "The database's own check catches mistakes even from code that bypasses Java, such as someone typing SQL by hand. And because the three rows appear at the same instant, nobody can ever see half a transfer.", "log": "[nio-8080-exec-7] SQL : insert into journal_entry (created_at,kind,id) values (?,?,?)\n[nio-8080-exec-7] SQL : insert into posting (account_id,amount_minor,currency,entry_id,id) values (?,?,?,?,?)\n[nio-8080-exec-7] bind : binding parameter (1:UUID) <- [31e03d5c-7b72-4cc8-b5f7-230c6146ab23]\n[nio-8080-exec-7] bind : binding parameter (2:BIGINT) <- [-300]\n[nio-8080-exec-7] SQL : insert into posting (account_id,amount_minor,currency,entry_id,id) values (?,?,?,?,?)\n[nio-8080-exec-7] bind : binding parameter (1:UUID) <- [e36785e7-b21b-4722-a551-baa568484a45]\n[nio-8080-exec-7] bind : binding parameter (2:BIGINT) <- [300]\n[nio-8080-exec-7] JpaTransactionManager : Closing JPA EntityManager [SessionImpl(402863785<open>)] after transaction",
+              "deep": "Each posting INSERT makes PostgreSQL check its foreign key: does <code>account_id</code> exist? To stop that account row being deleted mid-transaction, it takes a small <code>FOR KEY SHARE</code> lock on it. Remember that lock; it causes the deadlock below.\n\nThen <code>COMMIT</code>. The <code>DEFERRABLE INITIALLY DEFERRED</code> constraint triggers run now, sum the entry's postings, and find zero. Only now are the three rows visible to everyone, all at once: that's <button class=\"term\" data-term=\"atomicity\">atomicity</button>. The row lock on Alice is released at the same instant.\n\nAbridged: the bind lines for the entry's and postings' ids and currencies are omitted."},
+             {"lane": 3, "text": "201 Created with the entry and its signed postings.",
+              "what": "The server answers <code>201 Created</code>, the standard HTTP code for \"I made what you asked for\", with a description of the entry.",
+              "why": "Programs read the status code to decide what happened: 2xx means success, 4xx means the request was refused.", "log": "[nio-8080-exec-7] DispatcherServlet : Completed 201 CREATED"},
+             {"lane": 0, "text": "The client sees exactly what was written.",
+              "what": "The response lists the two postings exactly as stored: −300 for Alice and +300 for Bob.",
+              "why": "Returning what was actually written, not what was asked for, lets the caller check the result. Alice's balance afterwards is 700.",
+              "deep": "The real response body:\n\n<code>{\"id\":\"71d2728d-…\",\"kind\":\"TRANSFER\",\"createdAt\":\"2026-10-30T03:51:47.061243Z\",\"postings\":[{\"accountId\":\"31e03d5c-…\",\"amountMinor\":-300,\"currency\":\"USD\"},{\"accountId\":\"e36785e7-…\",\"amountMinor\":300,\"currency\":\"USD\"}]}</code>\n\nA later <code>GET /api/v1/accounts/31e03d5c-…/balance</code> returned <code>\"ledgerMinor\":700</code>."}
+           ],
+           "result": {"ok": true, "status": "201 Created", "summary": "Alice 700, Bob 300, the whole ledger still sums to 0."}},
+          {"label": "Overdraft ($7.01)", "request": "POST /lab/ledger/transfers\n\n{\"fromAccountId\":\"31e03d5c-…\",   (balance now $7.00)\n \"toAccountId\":\"e36785e7-…\",\"amountMinor\":701,\"currency\":\"USD\"}",
+           "steps": [
+             {"lane": 0, "text": "Alice now has $7.00 and tries to send $7.01.",
+              "what": "The same kind of request as before, for one cent more than Alice has.",
+              "why": "This shows what a refusal looks like, and that a refusal leaves no trace in the ledger."},
+             {"lane": 1, "text": "Routing succeeds.",
+              "what": "The address matches the same controller method as before.",
+              "why": "Nothing is wrong with the request's form, so it gets through.", "log": "[nio-8080-exec-9] DispatcherServlet : POST \"/lab/ledger/transfers\", parameters={}"},
+             {"lane": 2, "text": "Validation passes: 701 is positive and under the cap. Validation can't know the balance.",
+              "what": "701 is above zero and under the cap, so the simple field checks pass.",
+              "why": "Field checks only look at the request itself. Whether Alice can afford it depends on data in the database, so that check has to happen later, inside the transaction.",
+              "deep": "Bean Validation checks the request's <em>shape</em>. Whether the money is there depends on the database's current state, so that check can only happen inside the transaction."},
+             {"lane": 4, "text": "A transaction begins.",
+              "what": "Spring starts a database transaction, as before.",
+              "why": "Even a transfer that will be refused needs one: the balance check must happen while the lock is held.", "log": "[nio-8080-exec-9] JpaTransactionManager : Creating new transaction with name [dev.p2plab.payments.ledger.application.LedgerService.transfer]: PROPAGATION_REQUIRED,ISOLATION_DEFAULT\n[nio-8080-exec-9] TransactionImpl : begin"},
+             {"lane": 6, "text": "Bob's account is checked, Alice's is locked, then her balance is read: 700.",
+              "what": "Bob's account is checked, Alice's is locked, and her balance is read: 700 cents.",
+              "why": "The same safe order as before: lock first, then read.", "log": "[nio-8080-exec-9] SQL : SELECT currency, kind FROM account WHERE id = ?\n[nio-8080-exec-9] SQL : SELECT currency, kind FROM account WHERE id = ? FOR NO KEY UPDATE\n[nio-8080-exec-9] SQL : SELECT COALESCE(SUM(amount_minor), 0) FROM posting WHERE account_id = ?"},
+             {"lane": 5, "fail": true, "text": "700 + (-701) = -1. checkDebit throws InsufficientFundsException.",
+              "what": "700 − 701 = −1, below zero, so the rule refuses. In Java, refusing means throwing an <b>exception</b>: <code>InsufficientFundsException</code>, which stops the method on the spot.",
+              "why": "Because amounts are whole cents, the comparison is exact. One cent short is always caught.",
+              "deep": "One cent short is short. Integer cents make this comparison exact; with <code>double</code> you'd have to worry whether 7.00 - 7.01 is really below zero."},
+             {"lane": 4, "fail": true, "text": "The exception passes through the proxy, which rolls back. Nothing was inserted, and the lock is released.",
+              "what": "Spring sees the exception leave the service and <b>rolls back</b> the transaction: it tells the database to forget everything this transaction did. Alice's lock is released.",
+              "why": "Nothing had been written yet, but if it had, the rollback would throw it away. A refused transfer leaves the ledger exactly as it was.", "log": "[nio-8080-exec-9] TransactionInterceptor : Completing transaction for [dev.p2plab.payments.ledger.application.LedgerService.transfer] after exception: dev.p2plab.payments.ledger.domain.InsufficientFundsException: Insufficient funds in account 31e03d5c-7b72-4cc8-b5f7-230c6146ab23\n[nio-8080-exec-9] JpaTransactionManager : Initiating transaction rollback\n[nio-8080-exec-9] TransactionImpl : rolling back",
+              "deep": "There are no INSERT lines in this log at all. <code>persist</code> was never called, and even if it had been, a rollback discards the persistence context's queue unsent."},
+             {"lane": 3, "text": "LedgerExceptionHandler maps it to 409 Conflict.",
+              "what": "A small class, <code>LedgerExceptionHandler</code>, turns the exception into an HTTP answer: <code>409 Conflict</code> with the message \"Insufficient funds\".",
+              "why": "409 says the request was understood but clashes with the account's current state. The message doesn't reveal Alice's balance, which is private.", "log": "[nio-8080-exec-9] ExceptionHandlerExceptionResolver : Using @ExceptionHandler dev.p2plab.payments.ledger.api.LedgerExceptionHandler#insufficientFunds()\n[nio-8080-exec-9] DispatcherServlet : Completed 409 CONFLICT",
+              "deep": "Why 409 and not 400? The request itself is valid; the same request would succeed if Alice had more money. 409 says \"this conflicts with the current state of the resource\". Some APIs use 422 for the same idea.\n\nThe response body says only <code>Insufficient funds</code>. It doesn't reveal the balance."},
+             {"lane": 0, "text": "The client gets a problem response.",
+              "what": "The client receives the 409.",
+              "why": "The app can show \"not enough money\". Sending the same request again won't help until Alice has more."}
+           ],
+           "result": {"ok": false, "status": "409 Conflict", "summary": "Rolled back. No rows written; Alice still has $7.00."}},
+          {"label": "To herself", "request": "POST /lab/ledger/transfers\n\n{\"fromAccountId\":\"31e03d5c-…\",\"toAccountId\":\"31e03d5c-…\",\n \"amountMinor\":100,\"currency\":\"USD\"}",
+           "steps": [
+             {"lane": 0, "text": "Alice sends $1.00 to her own account.",
+              "what": "Alice tries to send $1.00 from her account to the same account.",
+              "why": "A trick request, easy to miss because every field looks fine on its own."},
+             {"lane": 2, "text": "Validation passes: each field is fine on its own.",
+              "what": "Each field passes its own check: both ids look like account ids, and the amount is fine.",
+              "why": "Field checks can't compare two fields with each other. That rule lives in the domain code.", "log": "[nio-8080-exec-1] RequestResponseBodyMethodProcessor : Read \"application/json;charset=UTF-8\" to [TransferRequest[fromAccountId=31e03d5c-7b72-4cc8-b5f7-230c6146ab23, toAccountId=31e03d5c-7b72-4cc8-b (truncated)...]"},
+             {"lane": 4, "text": "A transaction begins.",
+              "what": "Spring starts a database transaction, as before.",
+              "why": "Even a transfer that will be refused needs one: the balance check must happen while the lock is held.", "log": "[nio-8080-exec-1] JpaTransactionManager : Creating new transaction with name [dev.p2plab.payments.ledger.application.LedgerService.transfer]: PROPAGATION_REQUIRED,ISOLATION_DEFAULT\n[nio-8080-exec-1] TransactionImpl : begin"},
+             {"lane": 5, "fail": true, "text": "The JournalEntry constructor rejects it: an account may appear only once in an entry.",
+              "what": "Building the journal entry fails: an account may appear only once per entry. Java throws <code>IllegalArgumentException</code>, and Spring rolls back.",
+              "why": "−100 and +100 to the same account add up to zero, so the zero-sum rule alone would let this meaningless entry through. The extra rule closes that gap.", "log": "[nio-8080-exec-1] TransactionInterceptor : Completing transaction for [dev.p2plab.payments.ledger.application.LedgerService.transfer] after exception: java.lang.IllegalArgumentException: an account may appear only once in a journal entry\n[nio-8080-exec-1] TransactionImpl : rolling back",
+              "deep": "Postings of -100 and +100 to the same account <em>would</em> sum to zero, so the balance rule alone wouldn't catch it. It's still meaningless, and it would also make the account appear in two lock positions.\n\nNotice there is no SQL at all: the domain refused before the repository was called. The transaction had already begun, though, because the entry is built inside the <code>@Transactional</code> method. That cost is tiny, since no connection work has happened yet."},
+             {"lane": 3, "text": "IllegalArgumentException → 400 \"Invalid journal entry\".",
+              "what": "The exception handler turns it into <code>400 Bad Request</code>, \"Invalid journal entry\".",
+              "why": "400 means \"this request can never succeed as written\". Compare 409, which might succeed later, once there's enough money.", "log": "[nio-8080-exec-1] DispatcherServlet : Completed 400 BAD_REQUEST"}
+           ],
+           "result": {"ok": false, "status": "400 Bad Request", "summary": "The domain refused before any SQL ran."}},
+          {"label": "Waits for a lock", "request": "psql (another session) holds Alice's lock for 6 s:\n  BEGIN;\n  SELECT kind FROM account WHERE id = '31e03d5c-…' FOR NO KEY UPDATE;\n  SELECT pg_sleep(6);\n  COMMIT;\n\nTwo seconds in, the API receives a $1.00 transfer from Alice.",
+           "steps": [
+             {"lane": 7, "text": "A psql session locks Alice's row and then sleeps, keeping its transaction open.",
+              "what": "In a separate database session (<code>psql</code>, PostgreSQL's command-line tool), we lock Alice's row and then deliberately do nothing for 6 seconds, without finishing the transaction.",
+              "why": "It imitates a slow transaction, so we can watch what happens to everyone else while a lock is held.",
+              "deep": "This stands in for any slow transaction: one that waits on a network call, or one paused in a debugger. The row isn't changed, only locked."},
+             {"lane": 4, "text": "The API's transfer starts its transaction and checks Bob's account.",
+              "what": "Two seconds later, a $1.00 transfer from Alice reaches the API. It starts its transaction and checks Bob's account, as usual.",
+              "why": "Nothing unusual yet: nobody has locked Bob.", "log": "03:52:25.117 [io-8080-exec-10] JpaTransactionManager : Creating new transaction with name [dev.p2plab.payments.ledger.application.LedgerService.transfer]: PROPAGATION_REQUIRED,ISOLATION_DEFAULT\n03:52:25.119 [io-8080-exec-10] SQL : SELECT currency, kind FROM account WHERE id = ?"},
+             {"lane": 6, "text": "It asks for Alice's lock and goes to sleep inside PostgreSQL.",
+              "what": "The transfer asks to lock Alice's row. psql already holds that lock, so the database makes the transfer wait. The Java thread serving the request simply sits there until the database answers.",
+              "why": "This waiting is the lock doing its job: two decisions about Alice's money never overlap.", "log": "03:52:25.120 [io-8080-exec-10] SQL : SELECT currency, kind FROM account WHERE id = ? FOR NO KEY UPDATE",
+              "deep": "From Java's point of view, <code>getResultList()</code> simply hasn't returned. The Tomcat thread is blocked in a socket read, and it keeps holding one of the 10 HikariCP connections."},
+             {"lane": 7, "text": "pg_stat_activity shows who is waiting for whom.",
+              "what": "<code>pg_stat_activity</code> is a built-in view listing every database session and what it's doing. It shows the API's session (pid 37497) waiting for a lock, blocked by psql's session (pid 37593).",
+              "why": "When a payments system seems frozen, this is the first place to look. It names who is waiting, and who they are waiting for.", "log": "  pid  | state  | wait_event_type |  wait_event   | query\n 37497 | active | Lock            | transactionid | SELECT currency, kind FROM account WHERE id = $1 FOR NO KEY\n 37593 | active | Timeout         | PgSleep       | SELECT pg_sleep(6);\n\n  pid  | blocked_by | wait_event_type\n 37497 | {37593}    | Lock",
+              "deep": "<code>wait_event = transactionid</code>: the API's session (pid 37497) is waiting for psql's <em>transaction</em> to finish, because the row header names that transaction as the lock holder. <code>pg_blocking_pids(37497)</code> confirms the blocker is 37593, the psql session.\n\nThis is the first query to run when a payments system \"hangs\"."},
+             {"lane": 7, "text": "psql commits. The lock is released, and the waiting SELECT returns at once.",
+              "what": "After 6 seconds psql finishes its transaction. The lock is released, and the waiting transfer is let through at once.",
+              "why": "Locks always end with their transaction, whether it commits or rolls back."},
+             {"lane": 6, "text": "4.16 seconds after asking for the lock, the next statement runs: the balance read.",
+              "what": "The transfer now reads Alice's balance. The log timestamps show about 4.2 seconds between asking for the lock and this read.",
+              "why": "Because the read comes after the wait, it sees anything psql changed. That's what makes the wait safe, rather than just slow.", "log": "03:52:29.284 [io-8080-exec-10] SQL : SELECT COALESCE(SUM(amount_minor), 0) FROM posting WHERE account_id = ?",
+              "deep": "Compare the timestamps: 25.120 → 29.284. That gap is pure waiting.\n\nThe SUM gets a fresh snapshot taken <em>after</em> psql committed. If psql had inserted a debit before committing, this read would include it."},
+             {"lane": 4, "text": "The transfer proceeds and commits normally.",
+              "what": "The transfer passes the balance check, writes its rows and commits, like any normal transfer.",
+              "why": "Waiting changed the timing, not the outcome.", "log": "03:52:29.285 [io-8080-exec-10] LedgerService : journal entry posted entryId=33646fc5-549a-4d90-b964-640f2a00e6b9 kind=TRANSFER postings=2\n03:52:29.292 [io-8080-exec-10] DispatcherServlet : Completed 201 CREATED"},
+             {"lane": 0, "text": "curl measured the whole wait.",
+              "what": "From the client's side, the request took 4.18 seconds instead of the usual few dozen milliseconds.",
+              "why": "Safety costs waiting. With no time limit configured, the wait could be endless; exercise 6 adds one.", "log": "status=201 time_total=4.184627s",
+              "deep": "There is no lock timeout configured, so the request would have waited as long as psql held the lock. Exercise 6 asks you to set one."}
+           ],
+           "result": {"ok": true, "status": "201 after 4.2 s", "summary": "Debits of one account run strictly one at a time."}}
+        ]
+      }
+      </script>
+    </div>
+
+    <div class="prose">
+      <h2 id="c3-race" data-short="The race">The race: two transfers, one balance</h2>
+      <p>The rule "a customer can't spend money they don't have" sounds like one <code>if</code>: read the balance, and insert the debit only if it's enough. That pattern is called <button class="term" data-term="check-then-act">check-then-act</button>, and on its own it is broken.</p>
+      <p>Alice has $10.00. Two requests to send $10.00 arrive at the same moment, on two Tomcat threads, as two transactions. Both read the balance before either has committed. Both see $10.00, both checks pass, both commit. Alice ends at −$10.00.</p>
+      <p>No database constraint can stop this. Each entry is balanced, each posting is valid, and nothing is wrong with either transaction <em>on its own</em>. The bug lives only in how the two overlap.</p>
+      <p>Try it. Step T1 and T2 in any order, or press a Play button. Then tick the lock and try the same order again.</p>
+    </div>
+
+    <div class="fig" data-playground="race">
+      <div class="fig-head"><h4>Two transfers, one balance</h4><span class="label">Playground</span></div>
+      <div class="fig-body">
+        <p class="race-intro">Alice's account A holds <b>$10.00</b>. Transactions T1 and T2 each try to send <b>$10.00</b> from A to Bob.</p>
+        <div class="row" style="justify-content:space-between">
+          <label><input type="checkbox" id="race-lock"> Lock A before reading the balance (<code>FOR NO KEY UPDATE</code>)</label>
+          <div class="row">
+            <button class="chip" type="button" data-order="alternate">Play: take turns</button>
+            <button class="chip" type="button" data-order="serial">Play: T1, then T2</button>
+            <button class="btn ghost" type="button" data-reset>Reset</button>
+          </div>
+        </div>
+        <div class="race">
+          <div class="tx" data-tx="1"><span class="label">Transaction T1</span><ol class="tx-steps"></ol><p class="seen"></p><button class="btn" type="button">Step T1</button></div>
+          <div class="race-db"><span class="label">PostgreSQL</span><div class="readout"><span class="label">A's committed balance</span><div class="big" data-out="committed"></div><p data-out="holder"></p></div></div>
+          <div class="tx" data-tx="2"><span class="label">Transaction T2</span><ol class="tx-steps"></ol><p class="seen"></p><button class="btn" type="button">Step T2</button></div>
+        </div>
+        <span class="label">Timeline: time runs left to right, one column per press</span>
+        <div class="timeline-wrap"><table class="timeline" data-out="timeline" aria-live="polite"></table></div>
+        <p class="timeline-key"><span class="key stale">red READ</span> the balance changed before that transaction finished · <span class="key waiting">stripes</span> waiting for the lock · cells in one column happen at the same moment</p>
+        <div class="deep-box race-explain"><span class="label">What just happened</span><div class="deep" data-out="explain" aria-live="polite"></div></div>
+        <span class="label">What each transaction sends, in order</span>
+        <pre class="printout" aria-live="polite"></pre>
+        <div class="verdict" aria-live="polite"></div>
+      </div>
+      <!-- Narration for each move, in layers (ADR 0007). book.js picks the key; {t} is the moving transaction,
+           {o} the other one, {holder} the lock holder, {seen} the balance {t} read, {balance} A's committed balance. -->
+      <script type="application/json" data-narration>
+      {
+        "begin": {
+          "what": "{t} begins a transaction: a group of database steps that are saved together at COMMIT, or not at all. Nothing has been read or written yet.",
+          "why": "Everything {t} writes stays private until it commits. That keeps a half-finished transfer invisible to everyone else, and it's also why the other transaction can't see {t}'s debit early.",
+          "deep": "In the real service this starts when <code>LedgerService.transfer</code> is called: Spring's <a href=\"hood.html#h-proxy\">transaction proxy</a> borrows a connection from the HikariCP pool and switches off auto-commit, and the PostgreSQL driver sends <code>BEGIN</code> along with the first query.\n\nUnder READ COMMITTED, PostgreSQL's default, <code>BEGIN</code> doesn't freeze a view of the data. Each later statement takes its own fresh snapshot when it starts."
+        },
+        "lock-granted": {
+          "what": "{t} locks account A's row. Until {t} commits or rolls back, any other transaction that asks for the same lock has to wait.",
+          "why": "The lock makes debits of A take turns: only one can be between “read the balance” and “commit” at a time. Without it, two debits can both decide the same $10.00 is free.",
+          "deep": "This is <code>JpaLedgerRepository.lockForDebit</code>: <code>SELECT … FROM account WHERE id = A FOR NO KEY UPDATE</code>. It changes no data. PostgreSQL records the lock on the row itself, writing {t}'s transaction id into the row header.\n\nPlain SELECTs never wait for it. Neither do the foreign-key checks that posting INSERTs run against <code>account</code>, because they take the weaker KEY SHARE lock, which NO KEY UPDATE allows. That's why the code uses this mode instead of FOR UPDATE: see <a href=\"#c3-lock\">The fix</a> below."
+        },
+        "lock-waits": {
+          "what": "{t} asks to lock account A, but {holder} already holds that lock. {t} has to wait until {holder} commits or rolls back, and it can't read the balance until then.",
+          "why": "This wait is the fix working. {t} hasn't read anything yet, so when it's let through, it will read a balance that already includes whatever {holder} did.",
+          "deep": "{t}'s SELECT is now asleep inside PostgreSQL. Its Java thread is blocked waiting for the reply and keeps its pool connection the whole time.\n\nPostgreSQL sees {holder}'s transaction id on the row and queues {t} behind {holder}'s whole transaction. In <code>pg_stat_activity</code>, {t} shows <code>wait_event = transactionid</code> (<a href=\"hood.html#h-pg\">Under the hood</a> has a recording). Nothing limits the wait unless <code>lock_timeout</code> is set; exercise 6 adds one."
+        },
+        "lock-granted-after-wait": {
+          "what": "{o} has finished, so its lock is released. {t} gets the lock and stops waiting. Its next step reads the balance, and that read will include anything {o} committed.",
+          "why": "The order is now forced: {t}'s balance check happens strictly after {o}'s commit, so the two can't both spend the same money.",
+          "deep": "When {o}'s transaction ends, PostgreSQL wakes the transactions queued behind it. Before granting the lock, it checks whether {o} changed A's row; if it had, {t} would lock the newest version. Here {o} only added posting rows, so {t} locks the same account row.\n\nThe wait cost {t} time, not correctness. In the recorded run above, a single wait took 4.2 seconds."
+        },
+        "read": {
+          "what": "{t} reads A's balance: {seen}.",
+          "why": "{t} will base its decision on this number. The question is whether it's still true by the time {t} writes.",
+          "deep": "The balance isn't stored anywhere; it's computed: <code>SELECT COALESCE(SUM(amount_minor), 0) FROM posting WHERE account_id = A</code>. In READ COMMITTED this statement takes a snapshot as it starts, so it sees every posting committed before that moment, plus {t}'s own uncommitted ones."
+        },
+        "read-hidden": {
+          "what": "{t} reads A's balance: {seen}. {o} has already written a −$10.00 debit but hasn't committed it, so {t} can't see it.",
+          "why": "This is the moment the race is lost. {t} is about to decide using a balance that is already out of date.",
+          "deep": "{o}'s new posting rows are already in the table, stamped with {o}'s transaction id. {t}'s snapshot records which transactions were still running when it was taken, and skips rows they created. That's isolation doing its job: each transaction is correct on its own, and the bug exists only in how the two overlap."
+        },
+        "read-after-commit": {
+          "what": "{t} reads A's balance: {seen}. That includes the debit that was already committed.",
+          "why": "A read that runs after the other transaction's commit sees the true balance. The lock's job is to make sure the read always happens then, not by luck of timing.",
+          "deep": "This SELECT's snapshot was taken after the commit, so the committed posting rows are visible. The same statement run a moment earlier, before that commit, would have returned the old balance."
+        },
+        "check-refuse": {
+          "what": "{seen} isn't enough to send $10.00, so {t} refuses. It throws InsufficientFundsException, the transaction rolls back, and the user gets 409. Nothing was written.",
+          "why": "Refusing is correct: Alice had $10.00, and the other transfer already spent it.",
+          "deep": "<code>LedgerAccount.checkDebit</code> throws <code>InsufficientFundsException</code>, a <code>RuntimeException</code>. Spring's transaction proxy rolls back on runtime exceptions, and ROLLBACK also releases any lock {t} held. <code>LedgerExceptionHandler</code> turns the exception into a <code>409 Conflict</code> problem response."
+        },
+        "check-pass-locked": {
+          "what": "{t} decides {seen} is enough. It holds the lock, so nobody else can spend A's money before it writes.",
+          "why": "Here the check stays true until {t} acts on it, because the lock stops anyone else slipping in between.",
+          "deep": "The check is plain Java (<code>LedgerAccount.checkDebit</code>), not SQL. PostgreSQL isn't asked. What makes it safe is that every other debit of A is stuck at its lock request until {t} ends."
+        },
+        "check-pass-unlocked": {
+          "what": "{t} decides {seen} is enough. But nothing stops another transaction spending the same money before {t} writes, so this decision may already be out of date.",
+          "why": "This is check-then-act: the check and the write are separate steps, and the world can change in the gap between them.",
+          "deep": "PostgreSQL has no idea a decision was made. It sees a SELECT, then later some INSERTs, each valid on its own. The decision lives in a Java variable, where the database can't see it, so no constraint can protect it."
+        },
+        "insert": {
+          "what": "{t} writes its postings: A −$10.00 and B +$10.00. Until {t} commits, only {t} can see them.",
+          "why": "Both postings are in one transaction, so they become visible together or not at all, and the entry always balances.",
+          "deep": "In the real service, Hibernate keeps these INSERTs in memory and sends them just before COMMIT (<a href=\"hood.html#h-jpa\">Under the hood</a> shows the log). The race works the same either way: what matters is that the balance was read before anything was written.\n\nThe new rows are stamped with {t}'s transaction id, so other snapshots skip them until {t} commits."
+        },
+        "commit": {
+          "what": "{t} commits. Its debit is now saved and visible to everyone: A is {balance}.",
+          "why": "From now on, every new read of A's balance includes this debit.",
+          "deep": "At COMMIT, PostgreSQL first runs the deferred trigger <code>posting_entry_balanced</code>, which checks that the entry's postings sum to zero. Then it writes a commit record to its write-ahead log and marks {t}'s transaction id as committed. Every snapshot taken after that moment sees {t}'s rows."
+        },
+        "commit-release": {
+          "what": "{t} commits. Its debit is now saved and visible to everyone: A is {balance}. Its lock on A is released.",
+          "why": "The lock is released at commit, not before, so whoever goes next reads a balance that already includes this debit.",
+          "deep": "A row lock is held until its transaction ends; there is no way to release it earlier. Commit and unlock happen together, and PostgreSQL then wakes any transaction queued behind {t}.\n\nThe deferred trigger <code>posting_entry_balanced</code> ran just before, checking that the entry sums to zero."
+        },
+        "commit-overdrawn": {
+          "what": "{t} commits. Its debit is now saved and visible to everyone: A is {balance}. A is negative: the same $10.00 was spent twice.",
+          "why": "This is the bug the chapter is about. Every entry balances, so the ledger still adds up, but Alice spent money she didn't have.",
+          "deep": "Nothing failed. The deferred trigger passed, because each entry sums to zero. No constraint can say “balance ≥ 0”: the balance is a SUM over many rows, and a CHECK constraint only sees one row at a time. The defence has to stop the two transactions overlapping, which is what the lock does."
+        }
+      }
+      </script>
+      <p class="fig-cap">The playground follows PostgreSQL's READ COMMITTED rules: a read sees committed rows plus the transaction's own, and an INSERT stays invisible to the other transaction until COMMIT. Its outcomes match the recorded runs below.</p>
+    </div>
+
+    <div class="prose">
+      <p>Here is the race happening for real, in <code>LedgerConcurrencyIntegrationTest</code>. The test forces the "take turns" order with a barrier: each transaction waits after its read until the other has read too. It uses plain SQL with no lock:</p>
+      <div class="evidence"><pre class="printout">[pool-4-thread-1] LedgerConcurrencyIntegrationTest : naive transfer read balance=1000
+[pool-4-thread-2] LedgerConcurrencyIntegrationTest : naive transfer read balance=1000
+[pool-4-thread-2] LedgerConcurrencyIntegrationTest : naive transfer inserted a $10.00 debit
+[pool-4-thread-1] LedgerConcurrencyIntegrationTest : naive transfer inserted a $10.00 debit
+[           main] LedgerConcurrencyIntegrationTest : <span class="hl">after two naive $10.00 transfers from a $10.00 balance: alice=-1000 bob=2000</span></pre></div>
+      <p>And the real <code>LedgerService</code> with only the lock removed (a throwaway copy of the code, built to prove the test can fail). 50 simultaneous $1.00 transfers from $10.00:</p>
+      <div class="evidence"><pre class="printout">50 concurrent $1.00 transfers from a $10.00 balance: <span class="hl">completed=12 insufficient=38 alice=-200 bob=1200</span>
+
+[ERROR] LedgerConcurrencyIntegrationTest.fiftySimultaneousDebitsNeverOverdraw:114
+expected: 10
+ but was: 12</pre></div>
+      <p>Twelve succeeded, so two transfers were paid from money that wasn't there. Run it again and you may get 11 or 14: races depend on timing, which is why they slip through tests that send one request at a time. With the lock back in place, the same test gives the only correct answer, every run:</p>
+      <div class="evidence"><pre class="printout">50 concurrent $1.00 transfers from a $10.00 balance: completed=10 insufficient=40 alice=0 bob=1000</pre></div>
+
+      <h2 id="c3-lock" data-short="The fix">The fix: lock first, then read</h2>
+      <p>The fix is to make debits of one account take turns. Before reading Alice's balance, the transaction locks Alice's <code>account</code> row with <code>SELECT … FOR NO KEY UPDATE</code>. A second transaction that wants to debit Alice blocks at that line until the first commits.</p>
+      <p>When it wakes up, its balance read runs <em>after</em> the first one's commit. In READ COMMITTED each statement gets a fresh view, so it sees the new balance and refuses correctly.</p>
+      <p>Three details make this correct, and each was found by a test:</p>
+      <ol>
+        <li><b>Order matters: lock, then read.</b> If you read first and lock second, you are back to the race.</li>
+        <li><b>Only debits lock.</b> A credit can only increase a balance. If a debit reads a balance that is missing a just-committed credit, the worst outcome is a refusal the customer could retry. So Bob's account is never locked when he receives money, and parallel payments <em>to</em> one account don't queue.</li>
+        <li><b>A fixed order when several accounts are debited.</b> Accounts are visited sorted by id, so two entries can't each hold one lock while waiting for the other's.</li>
+      </ol>
+      <p>Which lock mode, though? The obvious choice, <code>FOR UPDATE</code>, deadlocks. Here is the recorded failure from a copy of the code that used it, when transfers ran in both directions at once:</p>
+    </div>
+
+    <div class="fig tracer">
+      <div class="fig-head"><h4>A→B and B→A at the same time</h4><div class="chips" aria-label="Scenario"></div></div>
+      <div class="fig-body stage">
+        <ol class="lanes"></ol>
+        <div class="side">
+          <div><span class="label">Setup</span><pre class="printout request"></pre></div>
+          <div><span class="label">What PostgreSQL reports (recorded)</span><pre class="printout" aria-live="polite"></pre></div>
+          <div class="result" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="controls"><div class="row"><button class="btn" type="button">Play</button><button class="btn ghost" type="button">Step</button><button class="btn ghost" type="button">Reset</button></div><span class="progress"></span></div>
+      <script type="application/json">
+      {
+        "lanes": [
+          {"name": "T1: A pays B", "detail": "debits A, credits B"},
+          {"name": "T2: B pays A", "detail": "debits B, credits A"},
+          {"name": "Row A", "detail": "account table"},
+          {"name": "Row B", "detail": "account table"},
+          {"name": "Deadlock detector", "detail": "PostgreSQL, after 1 s"}
+        ],
+        "scenarios": [
+          {"label": "With FOR UPDATE", "request": "Both accounts hold $10.00.\nT1 transfers $0.10 A→B while T2 transfers $0.10 B→A.\nThe lock is SELECT … FOR UPDATE.\n(40 such transfers in LedgerConcurrencyIntegrationTest.)",
+           "steps": [
+             {"lane": 0, "text": "T1 debits A, so it locks row A with FOR UPDATE. Granted.",
+              "what": "Transaction T1 moves money from A to B. It takes money from A, so it locks row A. Nobody else holds it, so the lock is granted.",
+              "why": "This is the normal debit lock from the transfer tracer, but using the lock type <code>FOR UPDATE</code>."},
+             {"lane": 1, "text": "T2 debits B, so it locks row B with FOR UPDATE. Granted. So far, so good: different rows.",
+              "what": "At the same time, T2 moves money from B to A, so it locks row B. Also granted: nobody holds B.",
+              "why": "Two different rows, two different locks. No conflict yet."},
+             {"lane": 0, "text": "T1 commits, and Hibernate flushes its INSERTs. The posting that credits B has a foreign key to account B.",
+              "what": "T1 finishes its checks and starts to commit, so Hibernate writes its postings. One of them gives money to B, so that row says <code>account_id = B</code>.",
+              "why": "A <b>foreign key</b> is a rule that a row may only point at a row that exists. Writing this posting makes the database check it."},
+             {"lane": 3, "fail": true, "text": "To check that foreign key, PostgreSQL needs a FOR KEY SHARE lock on row B. FOR UPDATE conflicts with it, so T1 waits for T2.",
+              "what": "To check that B exists, and to stop B being deleted mid-check, the database needs a small lock on row B (<code>FOR KEY SHARE</code>). T2 holds B with <code>FOR UPDATE</code>, which blocks even that small lock. So T1 waits for T2.",
+              "why": "This is the surprise: a lock our code never asked for, taken automatically by the foreign key check.",
+              "deep": "The foreign key check must stop row B being deleted, or having its id changed, before T1 commits. So it takes <code>FOR KEY SHARE</code>, the weakest row lock.\n\n<code>FOR UPDATE</code> means \"I may delete this row or change its key\", so it conflicts even with that. You never asked for this lock in your code; the foreign key did."},
+             {"lane": 1, "text": "T2 commits too. Its posting credits A, which needs FOR KEY SHARE on row A.",
+              "what": "T2 also starts to commit. Its posting gives money to A, so it needs the same small lock on row A.",
+              "why": "T2 is now doing the mirror image of what T1 did."},
+             {"lane": 2, "fail": true, "text": "Row A is held FOR UPDATE by T1, which is waiting for T2. T2 is now waiting for T1. Neither can ever proceed.",
+              "what": "Row A is held by T1, so T2 waits for T1. But T1 is already waiting for T2. Each waits for the other, so neither ever finishes. That loop is a <b>deadlock</b>.",
+              "why": "Like two cars on a one-lane bridge, each waiting for the other to back up."},
+             {"lane": 4, "fail": true, "text": "After deadlock_timeout (1 s by default) PostgreSQL looks for wait cycles, finds this one, and aborts one transaction.",
+              "what": "When a wait lasts over 1 second, PostgreSQL looks for loops like this. It finds one, picks a victim, and cancels that transaction with error code 40P01. The others carry on.",
+              "why": "No money is lost: the victim is rolled back completely. But that user's transfer fails for no good reason, so the code uses a different lock that can't form this loop.", "log": "SQL Error: 0, SQLState: 40P01\nERROR: deadlock detected\n  Detail: Process 71 waits for ShareLock on transaction 806; blocked by process 64.\n  Process 64 waits for AccessShareLock on tuple (0,9) of relation 16399 of database 16384; blocked by process 66.\n  Process 66 waits for ShareLock on transaction 807; blocked by process 62.\n  Process 62 waits for AccessShareLock on tuple (0,8) of relation 16399 of database 16384; blocked by process 71.\n  Where: while locking tuple (0,8) in relation \"account\"",
+              "deep": "The real cycle involved four sessions, not two. With 40 transfers in flight, waits chain through several transactions. Read it as a loop: 71 → 64 → 66 → 62 → 71.\n\n<code>tuple (0,8)</code> is a row's physical address: page 0, item 8 of the <code>account</code> table. <code>while locking tuple … in relation \"account\"</code> is the foreign key check.\n\nThe victim gets SQLSTATE <code>40P01</code>. The test saw it as an exception and failed, which is what it's for."}
+           ],
+           "result": {"ok": false, "status": "40P01 deadlock", "summary": "One transfer is aborted. Safe (nothing half-written) but a failure the user sees."}},
+          {"label": "With FOR NO KEY UPDATE", "request": "The same, but the lock is SELECT … FOR NO KEY UPDATE.\nRecorded with: node infra/lab/race.mjs --opposite\n(100 A→B and 100 B→A transfers of $1.00, sent at once.)",
+           "steps": [
+             {"lane": 0, "text": "T1 locks row A with FOR NO KEY UPDATE. Granted.",
+              "what": "T1 locks row A again, but with a different lock type, <code>FOR NO KEY UPDATE</code>. Granted.",
+              "why": "This lock type promises \"I won't delete this row or change its id\", which is true of a debit."},
+             {"lane": 1, "text": "T2 locks row B with FOR NO KEY UPDATE. Granted.",
+              "what": "T2 locks row B the same way. Granted.",
+              "why": "Still two different rows, so no conflict."},
+             {"lane": 3, "text": "T1's posting to B needs FOR KEY SHARE on row B. NO KEY UPDATE doesn't conflict with it, so it's granted at once.",
+              "what": "T1 writes its posting to B, and the foreign key check asks for the small lock on row B. This time it's granted at once, even though T2 holds B.",
+              "why": "The small lock only needs B not to be deleted, and T2's lock already promised that. The two locks are compatible.",
+              "deep": "<code>FOR NO KEY UPDATE</code> means \"I may change this row, but not its key, and I won't delete it\". That is all a debit needs. It still conflicts with another <code>FOR NO KEY UPDATE</code>, so two debits of A still queue. But it leaves the foreign key check alone.\n\nSee the lock table in <a href=\"hood.html#h-pg\">Under the hood</a>."},
+             {"lane": 0, "text": "T1 commits and releases A.",
+              "what": "T1 commits and releases its lock on A.",
+              "why": "T1 never had to wait for T2, so no loop could form."},
+             {"lane": 2, "text": "T2's posting to A takes FOR KEY SHARE on row A: granted. T2 commits.",
+              "what": "T2 writes its posting to A, gets the small lock on row A, and commits.",
+              "why": "Both transfers finish. Two debits of the <em>same</em> account still wait for each other, because two <code>NO KEY UPDATE</code> locks on one row do conflict."},
+             {"lane": 4, "text": "No cycle, no victim. The race script's real output:",
+              "what": "The race script sent 100 transfers each way, all at once. Every answer was 201 (done) or 409 (not enough money at that instant). There were no errors and no deadlocks, and A + B still totals $20.00.",
+              "why": "It shows the fix holds under real load, not only in a two-transaction example.", "log": "Sending 100 A→B and 100 B→A transfers of $1.00 at once. A and B each start with $10.00.\nStatus codes: 201 × 56, 409 × 144\nLatency ms: min 98, median 184, p95 295, max 299\nBalances: A $20.00, B $0.00, A + B $20.00\nInvariants hold: no negative balance, and no money created or destroyed.",
+              "deep": "Only 201 and 409. The 409s are honest \"insufficient funds\" answers: with $20.00 sloshing between two accounts, many transfers find their sender empty at that instant. There are no 500s and no deadlocks.\n\nThe final split (A $20, B $0) depends on timing, and changes from run to run. The <em>total</em> never does."}
+           ],
+           "result": {"ok": true, "status": "all 201 or 409", "summary": "Debits still serialize; foreign-key checks no longer collide."}}
+        ]
+      }
+      </script>
+    </div>
+
+    <div class="prose">
+      <h2 id="c3-crowd" data-short="1,000 requests">What 1,000 requests at once look like</h2>
+      <p><code>infra/lab/race.mjs</code> opens two accounts, funds one, then sends every transfer at the same instant and checks the invariants afterwards. Here's a real run with 1,000 one-cent transfers from a $5.00 balance:</p>
+      <div class="evidence"><pre class="printout">$ node infra/lab/race.mjs --requests 1000 --amount 1 --fund 500
+Sending 1000 A→B transfers of $0.01 at once. A starts with $5.00.
+Status codes: 201 × 500, 409 × 500
+Latency ms: min 425, median 1439, p95 1640, max 1660
+Throughput: 587 requests/s over 1705 ms
+Connection pool (9 samples): at most 10 connections in use, at most <span class="hl">189 requests waiting for one</span>
+Balances: A $0.00, B $5.00, A + B $5.00
+Invariants hold: no negative balance, and no money created or destroyed.</pre></div>
+      <p>Exactly 500 succeeded: that's how many cents there were. The answer is always correct; the cost of being correct shows up as waiting. A request passes through three queues, each narrower than the last:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Queue</th><th>Width</th><th>Who waits there</th><th>Seen in the run</th></tr></thead>
+        <tbody>
+          <tr><td>Tomcat worker threads</td><td>200 (Spring Boot's default)</td><td>Requests whose connection has been accepted but no thread is free</td><td>About 800 of the 1,000 at the peak</td></tr>
+          <tr><td>HikariCP <button class="term" data-term="pool">connection pool</button></td><td>10</td><td>Threads that are running but need a database connection</td><td><b>189 waiting</b>, 10 in use: 189 + 10 ≈ 200 threads</td></tr>
+          <tr><td>Alice's row lock</td><td>1</td><td>Transactions that hold a connection but are waiting for another debit of Alice to commit</td><td>Up to 9 of the 10 connections</td></tr>
+        </tbody>
+      </table></div>
+      <p>The narrowest queue sets the speed. Here it's the single row lock: Alice is a <button class="term" data-term="hot-account">hot account</button>, and every debit of her commits one after another. Debits of <em>different</em> accounts don't share that queue, so 1,000 transfers spread over 1,000 senders would finish far faster. They'd be limited by the 10 connections instead. Measuring and raising those limits is Chapter 8.</p>
+      <details class="reveal"><summary>Under the hood: why the median request took 1.4 seconds when each transfer takes a few milliseconds</summary><div>
+        <p>A single uncontended transfer took 46–57 ms end to end in smaller runs, almost all of it HTTP and JSON. Its time inside the database is a few milliseconds.</p>
+        <p>With 1,000 arriving together, a request's <button class="term" data-term="latency">latency</button> is mostly waiting: in Tomcat's accept queue, then for a connection, then for the lock. The first requests through finish quickly. The last wait for everything ahead of them.</p>
+        <p>That's why the minimum (425 ms) and the maximum (1,660 ms) are so far apart, while <button class="term" data-term="throughput">throughput</button> stays roughly flat at about 500–900 requests per second across runs. Adding requests adds waiting, not work per second.</p>
+        <p>A note on measurement: the pool sampler's own requests queue behind the burst too. In short runs it sometimes lands only before and after the burst and reports zero, which is why the script prints how many samples it took.</p>
+      </div></details>
+
+      <h2 id="c3-code" data-short="Code tour">Code tour</h2>
+      <p>Read in order: the schema, the domain rule, the service that orders the work, the repository that takes the lock, and the test that proves it.</p>
+    </div>
+
+    <figure class="fig code" data-lang="sql" data-source="apps/payment-api/src/main/resources/db/migration/V3__ledger.sql">
+      <div class="fig-head"><h4>1 · The posting table</h4><span class="path">db/migration/V3__ledger.sql</span></div>
+<pre class="src">
+-- Signed amounts: negative takes money out of the account, positive puts it in.
+CREATE TABLE posting (
+    id           UUID PRIMARY KEY,
+    entry_id     UUID       NOT NULL REFERENCES journal_entry (id),
+    account_id   UUID       NOT NULL REFERENCES account (id),
+    amount_minor BIGINT     NOT NULL CHECK (amount_minor &lt;&gt; 0),
+    currency     VARCHAR(3) NOT NULL CHECK (currency = 'USD')
+);
+CREATE INDEX posting_account_id_idx ON posting (account_id);
+</pre>
+      <ol class="notes">
+        <li data-at="-- Signed amounts"><span class="reads">A comment (SQL comments start with <code>--</code>), then <code>CREATE TABLE</code>: define a new table called <code>posting</code>, with one row per line of a journal entry.</span>One signed column instead of separate debit and credit columns, so "the entry balances" is just <code>SUM = 0</code>.</li>
+        <li data-at="REFERENCES account (id)"><span class="reads">"Each posting belongs to an entry and names an account. <code>REFERENCES</code> means both must point at rows that really exist, and <code>NOT NULL</code> means they can't be left blank."</span>The foreign key: a posting can't name an account that doesn't exist. Checking it takes a <code>FOR KEY SHARE</code> lock on the account row, the lock behind the deadlock tracer.</li>
+        <li data-at="BIGINT"><span class="reads">"The amount is a whole number, stored as a big integer." 300 means $3.00.</span>Integer cents, as ADR 0002 decided in Chapter 2. <code>BIGINT</code> matches Java's <code>long</code>.</li>
+        <li data-at="CHECK (amount_minor"><span class="reads">"Refuse any row whose amount is zero." <code>&lt;&gt;</code> means "not equal to" in SQL.</span>A zero posting moves nothing. The <code>Posting</code> record refuses it too.</li>
+        <li data-at="CREATE INDEX"><span class="reads">"Keep a sorted lookup of postings by account id." An index works like the index at the back of a book: it jumps straight to the right pages.</span>Every balance is <code>SUM(amount_minor) WHERE account_id = ?</code>. Without this index, PostgreSQL would scan every posting in the ledger for every balance check.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="sql" data-source="apps/payment-api/src/main/resources/db/migration/V3__ledger.sql">
+      <div class="fig-head"><h4>2 · The database's own double-entry check</h4><span class="path">db/migration/V3__ledger.sql</span></div>
+<pre class="src">
+CREATE FUNCTION ledger_check_entry_balanced() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    entry UUID;
+    total NUMERIC;
+    lines INTEGER;
+BEGIN
+    IF TG_TABLE_NAME = 'posting' THEN entry := NEW.entry_id; ELSE entry := NEW.id; END IF;
+    SELECT COALESCE(SUM(amount_minor), 0), count(*) INTO total, lines FROM posting WHERE entry_id = entry;
+    IF total &lt;&gt; 0 OR lines &lt; 2 THEN
+        RAISE EXCEPTION 'journal entry % is unbalanced: % postings summing to %', entry, lines, total
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END $$;
+
+CREATE CONSTRAINT TRIGGER journal_entry_balanced AFTER INSERT ON journal_entry
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ledger_check_entry_balanced();
+CREATE CONSTRAINT TRIGGER posting_entry_balanced AFTER INSERT ON posting
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ledger_check_entry_balanced();
+</pre>
+      <ol class="notes">
+        <li data-at="CREATE FUNCTION ledger_check_entry_balanced"><span class="reads">"Define a small program, stored inside the database, named <code>ledger_check_entry_balanced</code>." <code>RETURNS trigger</code> means the database runs it automatically when something happens to a table, rather than someone calling it.</span>A <button class="term" data-term="trigger">trigger</button> function, written in PL/pgSQL, PostgreSQL's built-in procedural language. It runs inside the database, so no client can skip it.</li>
+        <li data-at="IF TG_TABLE_NAME"><span class="reads">"Work out which journal entry the new row belongs to." <code>NEW</code> is the row that was just inserted. A posting row knows its entry through <code>entry_id</code>; an entry row is the entry itself, so <code>id</code>.</span>The same function guards both tables. An entry with zero postings is caught by the trigger on <code>journal_entry</code>; a lopsided one by the trigger on <code>posting</code>.</li>
+        <li data-at="total NUMERIC"><span class="reads">"Make a variable called <code>total</code> that can hold a number of any size."</span>The sum is <code>NUMERIC</code> (arbitrary precision) because summing <code>BIGINT</code>s could exceed a <code>BIGINT</code>.</li>
+        <li data-at="RAISE EXCEPTION" data-span="2"><span class="reads">"If the entry doesn't add up to zero, or has fewer than two lines, stop with this error message." Each <code>%</code> is filled in with the next value: the entry id, the line count, the total.</span>Fails the whole transaction. <code>check_violation</code> is SQLSTATE 23514, which Spring reports as a data integrity violation.</li>
+        <li data-at="DEFERRABLE INITIALLY DEFERRED" data-span="1"><span class="reads">"Whenever a row is inserted into <code>journal_entry</code>, run the check, but wait until the transaction commits to do it."</span>The key line. A normal trigger would run after the <em>first</em> posting INSERT, when the entry is only half-written and can't balance. Deferred means "run at COMMIT", once all of the entry's rows exist.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/ledger/domain/JournalEntry.java">
+      <div class="fig-head"><h4>3 · An entry that can't be unbalanced</h4><span class="path">ledger/domain/JournalEntry.java</span></div>
+<pre class="src">
+public record JournalEntry(UUID id, EntryKind kind, Instant createdAt, List&lt;Posting&gt; postings) {
+    public JournalEntry {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(kind, "kind");
+        Objects.requireNonNull(createdAt, "createdAt");
+        postings = List.copyOf(postings);
+        if (postings.size() &lt; 2) {
+            throw new IllegalArgumentException("a journal entry needs at least two postings");
+        }
+        Set&lt;UUID&gt; accounts = new HashSet&lt;&gt;();
+        Money total = Money.zero(postings.get(0).amount().currency());
+        for (Posting posting : postings) {
+            if (!accounts.add(posting.accountId())) {
+                throw new IllegalArgumentException("an account may appear only once in a journal entry");
+            }
+            total = total.plus(posting.amount());
+        }
+        if (total.amountMinor() != 0) {
+            throw new IllegalArgumentException("journal entry is unbalanced by " + total.amountMinor());
+        }
+    }
+</pre>
+      <ol class="notes">
+        <li data-at="public record JournalEntry"><span class="reads">"A journal entry is four values: an id, a kind, a creation time, and a list of postings." The block that follows, <code>public JournalEntry {</code>, runs every time one is created, before anyone can use it.</span>A record, so it's immutable. There is no method that could change an entry after it's built, which matches the append-only table.</li>
+        <li data-at="List.copyOf"><span class="reads">"Keep our own copy of the postings list, one that can't be changed."</span>Copies the caller's list into an unmodifiable one. Without this, a caller could keep a reference to the original list and add a posting after the checks ran.</li>
+        <li data-at="accounts.add"><span class="reads">"For each posting: remember its account. If we've already seen that account, refuse the whole entry." <code>!</code> means "not".</span>A <code>Set</code> returns <code>false</code> when the element is already there. That's how "Alice pays Alice" is rejected.</li>
+        <li data-at="total.plus"><span class="reads">"Add this posting's amount to the running total." Money values can't be changed, so <code>plus</code> returns a new one, and <code>total</code> is pointed at it.</span><code>Money.plus</code> refuses mixed currencies and uses <code>Math.addExact</code>, so a sum that overflows a <code>long</code> throws instead of silently wrapping to a huge negative number.</li>
+        <li data-at="total.amountMinor() != 0" data-span="3"><span class="reads">"After adding every posting, if the total isn't exactly zero, refuse." Throwing an exception here means the object is never created.</span>The double-entry rule itself. If a <code>JournalEntry</code> object exists anywhere in the JVM, it balances.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/ledger/application/LedgerService.java">
+      <div class="fig-head"><h4>4 · The service: order is everything</h4><span class="path">ledger/application/LedgerService.java</span></div>
+<pre class="src">
+@Transactional
+public JournalEntry transfer(UUID fromAccountId, UUID toAccountId, Money amount) {
+    return post(JournalEntry.move(EntryKind.TRANSFER, fromAccountId, toAccountId, amount, clock));
+}
+
+@Transactional(readOnly = true)
+public Money balance(UUID accountId, Currency currency) {
+    return ledger.balance(accountId, currency);
+}
+
+private JournalEntry post(JournalEntry entry) {
+    // Visit accounts in id order, so two entries that debit the same accounts always lock them in the same
+    // order and can never wait for each other in a cycle (a deadlock).
+    entry.postings().stream().sorted(Comparator.comparing(Posting::accountId)).forEach(posting -&gt; {
+        UUID id = posting.accountId();
+        if (posting.isDebit()) {
+            LedgerAccount account = ledger.lockForDebit(id).orElseThrow(() -&gt; new UnknownLedgerAccountException(id));
+            // Read the balance only AFTER taking the lock: every earlier debit of this account has committed
+            // by now, and this statement's fresh snapshot includes it. Check-then-insert is safe only here.
+            account.checkDebit(ledger.balance(id, account.currency()), posting);
+        } else {
+            ledger.find(id).orElseThrow(() -&gt; new UnknownLedgerAccountException(id)).checkCredit(posting);
+        }
+    });
+    ledger.append(entry);
+    log.info("journal entry posted entryId={} kind={} postings={}", entry.id(), entry.kind(), entry.postings().size());
+    return entry;
+}
+</pre>
+      <ol class="notes">
+        <li data-at="@Transactional" data-span="4"><span class="reads">"To transfer: build a journal entry that moves the amount from one account to the other, then post it." <code>@Transactional</code> is an annotation, a label Spring reads: "run this whole method inside one database transaction".</span>One transaction around everything: the lock, the read, the check and the inserts. That gives atomicity, and it also means the lock lasts until the inserts are committed. A lock released before the insert would protect nothing.</li>
+        <li data-at="balance(UUID accountId" data-span="3"><span class="reads">"To get a balance, ask the ledger." <code>readOnly = true</code> tells Spring and the database that this transaction won't write anything.</span>The balance endpoint in <code>AccountService</code> now calls this, replacing Chapter 2's hard-coded zero.</li>
+        <li data-at="sorted(Comparator.comparing"><span class="reads">"Take the entry's postings, sort them by account id, and handle each one in turn." <code>posting -&gt; { … }</code> is a lambda: a small unnamed function that runs once for each posting.</span>A fixed global order for every lock. Every transaction that needs rows A and B takes them in the same sequence, so a cycle of waits can't form.</li>
+        <li data-at="lockForDebit"><span class="reads">"If this posting takes money out, lock the account. If the account doesn't exist, fail with 'unknown account'." <code>orElseThrow</code> unwraps an <code>Optional</code>, a box that either holds a value or is empty, and throws if it's empty.</span>Step one for a debit: <code>SELECT … FOR NO KEY UPDATE</code>. If another debit of this account is in flight, this line blocks until that transaction ends.</li>
+        <li data-at="account.checkDebit(ledger.balance"><span class="reads">"Read the account's balance, then check that this debit won't take it below zero." Java runs the inner call first, so <code>ledger.balance(…)</code> happens before <code>checkDebit(…)</code>.</span>Step two: read the balance <em>after</em> the lock, then check it. Swap the order of these two lines and the race returns.</li>
+        <li data-at="ledger.find(id)"><span class="reads">"Otherwise (it's money coming in): look the account up without locking it, and check it can receive this currency."</span>Credits only check that the account exists and has the right currency. Not locking them means many payments to one popular account don't queue behind each other.</li>
+        <li data-at="ledger.append(entry)"><span class="reads">"Every posting passed its checks, so save the entry."</span>Queues three INSERTs in Hibernate. They are sent at commit, while the lock is still held.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/ledger/persistence/JpaLedgerRepository.java">
+      <div class="fig-head"><h4>5 · The lock, in SQL</h4><span class="path">ledger/persistence/JpaLedgerRepository.java</span></div>
+<pre class="src">
+@Override
+public Optional&lt;LedgerAccount&gt; lockForDebit(UUID accountId) {
+    // FOR NO KEY UPDATE, not FOR UPDATE: it blocks other debits of this account, but not the FOR KEY SHARE
+    // lock that a posting's foreign key takes when another transaction credits it. FOR UPDATE would make
+    // opposite-direction transfers (A-&gt;B while B-&gt;A) deadlock. See ADR 0006.
+    return selectAccount("SELECT currency, kind FROM account WHERE id = :id FOR NO KEY UPDATE", accountId);
+}
+
+@Override
+public Money balance(UUID accountId, Currency currency) {
+    Object sum = entityManager
+        .createNativeQuery("SELECT COALESCE(SUM(amount_minor), 0) FROM posting WHERE account_id = :id")
+        .setParameter("id", accountId)
+        .getSingleResult();
+    // PostgreSQL's SUM(bigint) is NUMERIC; longValueExact throws rather than silently truncating.
+    return new Money(((BigDecimal) sum).longValueExact(), currency);
+}
+</pre>
+      <ol class="notes">
+        <li data-at="// FOR NO KEY UPDATE" data-span="3"><span class="reads">A comment for future readers. Java ignores lines starting with <code>//</code>.</span>The comment records a decision that was paid for with a real deadlock. Without it, a future reader might "simplify" this to <code>FOR UPDATE</code>.</li>
+        <li data-at="FOR NO KEY UPDATE&quot;"><span class="reads">"Fetch this account's currency and kind, and lock its row until my transaction ends."</span>Native SQL, passed through Hibernate unchanged. It locks the <code>account</code> row, not any posting. The account row is the one thing every debit of Alice has in common.</li>
+        <li data-at="createNativeQuery"><span class="reads">"Ask the database to add up every posting for this account, filling in <code>:id</code> with the account id, and give back the single result."</span>Native SQL again, with a named parameter (<code>:id</code>). Hibernate turns it into a <code>?</code> placeholder, as the log shows, so no value is ever spliced into the SQL text.</li>
+        <li data-at="COALESCE"><span class="reads">"Use the sum, or 0 if there's nothing to add up." <code>COALESCE(a, b)</code> means "a, unless a is empty, then b".</span>An account with no postings has <code>SUM = NULL</code>, not 0. <code>COALESCE</code> turns that into 0.</li>
+        <li data-at="longValueExact"><span class="reads">"Turn the database's number into a Java whole number, and wrap it as Money in the account's currency."</span>Converts PostgreSQL's arbitrary-precision <code>NUMERIC</code> back to a <code>long</code>, and throws if it doesn't fit, rather than silently truncating.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/test/java/dev/p2plab/payments/ledger/LedgerConcurrencyIntegrationTest.java">
+      <div class="fig-head"><h4>6 · Proving it with 50 threads</h4><span class="path">test/…/ledger/LedgerConcurrencyIntegrationTest.java</span></div>
+<pre class="src">
+/** Submits every task, then releases them at the same instant so they really do overlap. */
+private List&lt;Future&lt;Object&gt;&gt; raceAll(List&lt;Callable&lt;Object&gt;&gt; tasks) {
+    CountDownLatch start = new CountDownLatch(1);
+    List&lt;Future&lt;Object&gt;&gt; futures = new ArrayList&lt;&gt;();
+    for (Callable&lt;Object&gt; task : tasks) {
+        futures.add(pool.submit(() -&gt; {
+            start.await();
+            return task.call();
+        }));
+    }
+    start.countDown();
+    return futures;
+}
+</pre>
+      <ol class="notes">
+        <li data-at="CountDownLatch start"><span class="reads">"Make a gate that opens after one signal."</span>A starting gate. A <code>CountDownLatch(1)</code> blocks every thread that calls <code>await()</code> until someone calls <code>countDown()</code> once.</li>
+        <li data-at="pool.submit"><span class="reads">"For each task: hand it to a worker thread. That thread first waits at the gate, then runs the task." A <b>thread</b> is one independent line of work; 50 threads can run at once.</span>Each task goes to a thread from a pool of 50, and immediately parks at the gate. Without the gate, early tasks would finish before later ones even started, and nothing would overlap.</li>
+        <li data-at="start.countDown()"><span class="reads">"Give the one signal." Every waiting thread is released at the same moment.</span>Opens the gate: all 50 threads wake at once and hit the database together. This is how a concurrency test turns "might happen in production" into "happens every run".</li>
+      </ol>
+    </figure>
+
+    <div class="prose">
+      <h2 id="c3-failures" data-short="Failure scenarios">Failure scenarios</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Scenario</th><th>Result</th><th>Handled by</th></tr></thead>
+        <tbody>
+          <tr><td>Transfer more than the balance</td><td>409, nothing written</td><td><code>LedgerAccount.checkDebit</code></td></tr>
+          <tr><td>Two debits of one account at once</td><td>Second waits, then sees the new balance</td><td><code>FOR NO KEY UPDATE</code> + read after lock</td></tr>
+          <tr><td>A→B and B→A at once</td><td>Both proceed; no deadlock</td><td><code>NO KEY</code> lock mode; sorted lock order</td></tr>
+          <tr><td>Same account on both sides</td><td>400 "Invalid journal entry"</td><td><code>JournalEntry</code> constructor</td></tr>
+          <tr><td>Zero, negative or &gt; $1,000,000 amount</td><td>400 before any transaction</td><td><code>@Positive</code>, <code>@Max</code></td></tr>
+          <tr><td>Unknown account</td><td>404 "Account not found"</td><td><code>UnknownLedgerAccountException</code></td></tr>
+          <tr><td>Unbalanced entry via raw SQL</td><td><code>ERROR … is unbalanced</code> at COMMIT</td><td>Deferred constraint trigger</td></tr>
+          <tr><td><code>UPDATE</code> or <code>DELETE</code> of a posting</td><td><code>ERROR: ledger is append-only</code></td><td>Statement triggers</td></tr>
+          <tr><td>Crash between the two posting INSERTs</td><td>Neither is ever visible</td><td>Transaction atomicity</td></tr>
+          <tr><td>A transaction holds the lock and stalls</td><td><b>Every other debit of that account waits, indefinitely</b></td><td>Not yet. Exercise 6 adds <code>lock_timeout</code></td></tr>
+          <tr><td>Client retries a transfer after a timeout</td><td><b>The money moves twice</b></td><td>Not yet: <button class="term" data-term="idempotency">idempotency</button> is Chapter 4</td></tr>
+          <tr><td>Lab endpoints in a deployed environment</td><td><b>Anyone can move money</b></td><td>Only <code>-f infra/compose.lab.yaml</code> enables them, and they're removed by Chapter 5</td></tr>
+        </tbody>
+      </table></div>
+
+      <h2 id="c3-run" data-short="Run it yourself">Run it yourself</h2>
+      <p>Start the stack with the lab overlay. Add <code>-f infra/compose.debug.yaml</code> as well to see the SQL, but it logs names and slows the race down.</p>
+      <div class="cmd"><pre>docker compose -f compose.yaml -f infra/compose.lab.yaml up --build
+node infra/lab/race.mjs                        # 100 transfers from one account
+node infra/lab/race.mjs --opposite             # both directions at once
+node infra/lab/race.mjs --requests 1000 --amount 1 --fund 500</pre></div>
+      <p>Fund and move money by hand. Replace the ids with ones from your own <code>POST /api/v1/accounts</code> responses:</p>
+      <div class="cmd"><pre>curl -i -X POST http://localhost:8080/lab/ledger/funding -H 'Content-Type: application/json' \
+     -d '{"accountId":"&lt;alice&gt;","amountMinor":1000,"currency":"USD"}'
+curl -i -X POST http://localhost:8080/lab/ledger/transfers -H 'Content-Type: application/json' \
+     -d '{"fromAccountId":"&lt;alice&gt;","toAccountId":"&lt;bob&gt;","amountMinor":300,"currency":"USD"}'
+curl http://localhost:8080/api/v1/accounts/&lt;alice&gt;/balance
+docker compose exec postgres psql -U p2p_lab -d p2p_lab -c "SELECT SUM(amount_minor) FROM posting;"</pre></div>
+      <p>Run the tests. Docker must be running:</p>
+      <div class="cmd"><pre>cd apps/payment-api &amp;&amp; mvn verify</pre></div>
+      <p>Expected: <code>Tests run: 51, Failures: 0, Errors: 0</code> and <code>BUILD SUCCESS</code>. The two ledger integration tests take about 10 seconds together.</p>
+
+      <h2 id="c3-exercises" data-short="Exercises">Exercises</h2>
+      <details class="reveal predict"><summary>Run <code>race.mjs</code> with the defaults ($10.00, 100 transfers of $1.00). How many 201s and how many 409s?</summary><div><p><b>Exactly 10 and 90, every time.</b> There were ten dollars. The recorded runs printed <code>201 × 10, 409 × 90</code>. If you ever see 11, the lock is broken.</p></div></details>
+      <details class="reveal predict"><summary>In <code>LedgerService.post</code>, swap the two lines so the balance is read <em>before</em> <code>lockForDebit</code>. Which test fails, and how?</summary><div><p><code>fiftySimultaneousDebitsNeverOverdraw</code>, usually with more than 10 completed and a negative balance for Alice. Every transaction reads $10.00 first, then queues for the lock with a stale number in hand. <code>aWaitingDebitReadsTheBalanceCommittedWhileItWaited</code> fails too. Revert afterwards.</p></div></details>
+      <details class="reveal predict"><summary>Change <code>FOR NO KEY UPDATE</code> to <code>FOR UPDATE</code> and run <code>mvn verify</code>. What happens?</summary><div><p><code>oppositeDirectionTransfersDoNotDeadlock</code> errors with <code>ERROR: deadlock detected</code> (SQLSTATE 40P01), <code>while locking tuple … in relation "account"</code>. The other tests still pass. That is why the deadlock needed its own test. This exact change was run while writing the chapter.</p></div></details>
+      <details class="reveal predict"><summary>In psql, hold Alice's lock (<code>BEGIN; SELECT … FOR NO KEY UPDATE;</code>) and, in another terminal, send a transfer <em>to</em> Alice. Does it wait?</summary><div><p><b>No.</b> Credits don't take the debit lock, and the foreign key's <code>FOR KEY SHARE</code> doesn't conflict with <code>FOR NO KEY UPDATE</code>, so the transfer returns 201 immediately. Now send a transfer <em>from</em> Alice: that one waits until you <code>COMMIT</code>.</p></div></details>
+      <details class="reveal predict"><summary>Fund Alice with $10.00, then run <code>SELECT SUM(amount_minor) FROM posting WHERE account_id = '00000000-0000-0000-0000-00000000f00d';</code>. What's the sign, and why?</summary><div><p><b>Negative</b>, and exactly minus the total of every funding entry ever posted. The funding account is where simulated money enters the ledger. Its negative balance is the other half of every customer's positive one, which is why the whole ledger sums to zero.</p></div></details>
+      <details class="reveal"><summary>Exercise 6: stop a stalled transaction blocking everyone</summary><div><p>Today a transaction that holds Alice's lock and stalls blocks every other debit of Alice indefinitely, as the psql experiment showed (4.2 s for a 6 s sleep).</p><p>Make waiting fail fast instead. Run <code>SET LOCAL lock_timeout = '2s'</code> at the start of the transaction, or set it per connection with HikariCP's <code>connection-init-sql</code>. Then map the resulting SQLSTATE <code>55P03</code> (<code>lock_not_available</code>) to a <code>503</code> with a <code>Retry-After</code> header.</p><p>Repeat the psql experiment and expect the curl to fail after about 2 s. Decide whether a timed-out transfer is safe to retry. Hint: did anything commit?</p></div></details>
+      <details class="reveal"><summary>Exercise 7: a reversal</summary><div><p>Postings can never be edited. Add <code>EntryKind.REVERSAL</code> and a <code>LedgerService.reverse(entryId)</code> that posts the opposite of an existing entry: same accounts, amounts negated.</p><p>Which balance checks still apply? (A reversal debits the original <em>recipient</em>, who may have spent the money.) You'll need a new migration to allow the new kind in the <code>CHECK</code> constraint. Why can't you edit <code>V3__ledger.sql</code> instead?</p></div></details>
+    </div>
+
+    <div class="prose">
+      <h2 id="c3-quiz" data-short="Quiz">Check your understanding</h2>
+    </div>
+    <div class="quiz" data-quiz="ch-03">
+      <div class="q" data-answer="b">
+        <p class="q-text">Why does the sum of every posting in the ledger always equal zero?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">A nightly job corrects it</button></li>
+          <li><button data-opt="b">Every entry sums to zero, and money only enters through the funding account, whose balance goes negative by the amount issued</button></li>
+          <li><button data-opt="c">PostgreSQL rounds small differences away</button></li>
+          <li><button data-opt="d">Customer balances are stored separately</button></li>
+        </ul>
+        <p class="q-why" hidden>If every entry is zero, any sum of entries is zero. Funding doesn't break this: it's an ordinary entry, with −X to the funding account and +X to the customer.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">The app crashes after Hibernate sends Alice's <code>-300</code> posting but before Bob's <code>+300</code>. What does the database contain afterwards?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Alice's posting only, so $3.00 is lost</button></li>
+          <li><button data-opt="b">Both postings, because PostgreSQL finishes the job</button></li>
+          <li><button data-opt="c">Neither posting: the transaction never committed, so PostgreSQL discards everything it wrote</button></li>
+          <li><button data-opt="d">An entry marked as failed</button></li>
+        </ul>
+        <p class="q-why" hidden>Atomicity. Uncommitted rows are only ever visible to their own transaction, and a dropped connection rolls the transaction back.</p>
+      </div>
+      <div class="q" data-answer="a">
+        <p class="q-text">Why is the database's balance check <code>DEFERRABLE INITIALLY DEFERRED</code>?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">The postings of one entry are inserted one at a time, so after the first INSERT the entry can't balance yet. The check must wait for COMMIT.</button></li>
+          <li><button data-opt="b">Deferred triggers are faster</button></li>
+          <li><button data-opt="c">So the application can skip it when it's busy</button></li>
+          <li><button data-opt="d">PostgreSQL requires all triggers to be deferred</button></li>
+        </ul>
+        <p class="q-why" hidden>A normal trigger runs right after each row. The first posting alone sums to −300 and would always be rejected. Deferring moves the check to the moment the whole entry is visible.</p>
+      </div>
+      <div class="q" data-answer="d">
+        <p class="q-text">Two transfers each read Alice's $10.00 balance, each check that $10.00 is enough, and each insert a $10.00 debit. Which database rule stops this?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">The deferred balance trigger</button></li>
+          <li><button data-opt="b"><code>CHECK (amount_minor &lt;&gt; 0)</code></button></li>
+          <li><button data-opt="c">The foreign key</button></li>
+          <li><button data-opt="d">None of them. Each entry is valid on its own; the bug is in how the two transactions overlap, so the fix is a lock taken before the read.</button></li>
+        </ul>
+        <p class="q-why" hidden>Recorded in the test: both reads returned 1000, both commits succeeded, and Alice ended at −1000. Rules about a single row or entry can't see two transactions together.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">A developer moves <code>ledger.balance(...)</code> to <em>before</em> <code>ledger.lockForDebit(...)</code>. Is the lock still useful?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Yes, the lock protects the whole transaction regardless of order</button></li>
+          <li><button data-opt="b">No. Every transaction reads the same stale balance, then queues for the lock with that number, so the race is back.</button></li>
+          <li><button data-opt="c">Yes, because READ COMMITTED refreshes old reads</button></li>
+          <li><button data-opt="d">No, because the lock is released before the read</button></li>
+        </ul>
+        <p class="q-why" hidden>READ COMMITTED gives each <em>statement</em> a fresh view, but a value you already read doesn't change. Only a read that runs after the lock is granted sees the previous debit's commit.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">Why does a transfer <em>to</em> Bob not lock Bob's account?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Bob's account is the funding account</button></li>
+          <li><button data-opt="b">PostgreSQL forbids two locks in one transaction</button></li>
+          <li><button data-opt="c">A credit can only increase a balance, so it can't break "never negative". Not locking it keeps payments to a popular account from queueing.</button></li>
+          <li><button data-opt="d">Credits are processed later</button></li>
+        </ul>
+        <p class="q-why" hidden>The rule being protected is about debits. A debit that reads a balance missing a simultaneous credit errs on the safe side: it refuses money that was arriving.</p>
+      </div>
+      <div class="q" data-answer="a">
+        <p class="q-text">With <code>FOR UPDATE</code>, transfers A→B and B→A deadlocked. Why?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Each posting's foreign key check needs a FOR KEY SHARE lock on the account it credits. FOR UPDATE conflicts with that, so each transaction waited for the other's debit lock.</button></li>
+          <li><button data-opt="b">FOR UPDATE locks the whole table</button></li>
+          <li><button data-opt="c">The accounts were locked in random order</button></li>
+          <li><button data-opt="d">HikariCP ran out of connections</button></li>
+        </ul>
+        <p class="q-why" hidden>The lock you didn't write, the foreign key's, completed the cycle. <code>FOR NO KEY UPDATE</code> is compatible with <code>FOR KEY SHARE</code> but still conflicts with itself, so debits still queue and foreign key checks pass through.</p>
+      </div>
+      <div class="q" data-answer="d">
+        <p class="q-text">How does PostgreSQL resolve a deadlock?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">It waits forever until someone restarts the server</button></li>
+          <li><button data-opt="b">It lets both transactions commit</button></li>
+          <li><button data-opt="c">It retries both automatically</button></li>
+          <li><button data-opt="d">After <code>deadlock_timeout</code> it detects the cycle and aborts one transaction with SQLSTATE 40P01; the others proceed</button></li>
+        </ul>
+        <p class="q-why" hidden>The aborted transaction is rolled back, so nothing is half-written. But the user sees a failure, which is why the lock mode was changed to avoid the cycle altogether.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">1,000 transfers from Alice arrive at once. What limits how fast they complete?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Tomcat's 200 threads</button></li>
+          <li><button data-opt="b">Alice's single row lock: her debits commit one at a time, however many threads and connections there are</button></li>
+          <li><button data-opt="c">The JSON parser</button></li>
+          <li><button data-opt="d">Node's <code>fetch</code></button></li>
+        </ul>
+        <p class="q-why" hidden>The narrowest queue sets the speed. Alice is a hot account. Spread the same 1,000 transfers over 1,000 senders and the 10 database connections become the limit instead.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">During the 1,000-request run, the sampler saw 10 connections in use and 189 requests waiting for one. Why roughly 200 in total, not 1,000?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">800 requests failed</button></li>
+          <li><button data-opt="b">HikariCP rejects requests beyond 200</button></li>
+          <li><button data-opt="c">Only about 200 requests can be on Tomcat's worker threads at once. The rest wait in front of Tomcat, before they can even ask for a connection.</button></li>
+          <li><button data-opt="d">The sampler can't count higher</button></li>
+        </ul>
+        <p class="q-why" hidden>Queues nest: Tomcat threads (200), then connections (10), then the lock (1). All 1,000 requests got an answer, 500 × 201 and 500 × 409, which is exactly how many cents there were.</p>
+      </div>
+    </div>
+
+    <nav class="chapter-nav prose" aria-label="Chapter navigation">
+      <a href="hood.html"><small>Previous</small>Under the hood</a>
+      <a class="next" href="glossary.html"><small>Next</small>Glossary (Chapter 4 is planned)</a>
+    </nav>
+  </section>
+  </main>
+</div>
+
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-docker.min.js"></script>
+<script src="glossary.js"></script>
+<script src="book.js"></script>
+</body>
+</html>

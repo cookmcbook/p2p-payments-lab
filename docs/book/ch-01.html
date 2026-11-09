@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chapter 1 · P2P Payments Lab Textbook</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<link rel="stylesheet" href="book.css">
+</head>
+<body>
+<!--
+  The interactive edition of docs/chapters/*.md.
+  Code excerpts inside <figure class="code"> must match the real source file named in data-source;
+  docs/book/tools/check-snippets.mjs enforces this in CI. Edit both in the same commit.
+-->
+<div class="topbar">
+  <b>P2P Payments Lab</b>
+  <button class="btn ghost" type="button" aria-expanded="false" aria-controls="rail">Contents</button>
+</div>
+<div class="shell">
+  <nav class="rail" id="rail" aria-label="Book contents">
+    <a class="brand" href="index.html"><span>Living textbook</span><b>P2P Payments Lab</b></a>
+    <ul class="toc">
+      <li><a href="index.html"><span class="no">00</span><span>How to use this book</span></a></li>
+      <li><a href="ch-01.html"><span class="no">01</span><span>Runnable service</span><span class="score" data-score="ch-01" data-total="6"></span></a></li>
+      <li><a href="ch-02.html"><span class="no">02</span><span>Accounts</span><span class="score" data-score="ch-02" data-total="10"></span></a></li>
+      <li><a href="hood.html"><span class="no">UH</span><span>Under the hood</span><span class="score" data-score="hood" data-total="10"></span></a></li>
+      <li><a href="ch-03.html"><span class="no">03</span><span>Ledger and concurrency</span><span class="score" data-score="ch-03" data-total="10"></span></a></li>
+      <li><a href="glossary.html"><span class="no">Gl</span><span>Glossary</span></a></li>
+    </ul>
+    <ul class="toc pending" aria-label="Planned chapters">
+      <li><span class="toc-planned">04 · Payments and idempotency</span></li>
+      <li><span class="toc-planned">05 · Authentication</span></li>
+      <li><span class="toc-planned">06 · Kafka and the outbox</span></li>
+    </ul>
+    <div class="rail-foot">
+      <div class="theme-toggle" role="group" aria-label="Theme">
+        <button type="button" data-mode="system">Auto</button>
+        <button type="button" data-mode="light">Light</button>
+        <button type="button" data-mode="dark">Dark</button>
+      </div>
+      <div>Fictional platform. No real money, banks or rails. Quiz answers are saved only in this browser.</div>
+    </div>
+  </nav>
+
+  <main>
+  <!-- ================================================================ CHAPTER 1 -->
+  <section class="view" data-view="ch-01">
+    <div class="prose">
+      <p class="eyebrow">Chapter 1</p>
+      <h1>From empty repository to runnable service</h1>
+      <p class="lede">Before an API can move money it has to start, connect to its database, and answer a request. This chapter follows that path and shows why a running service is not the same as a working payments product.</p>
+      <div class="objectives">
+        <span class="label">You will be able to</span>
+        <ul>
+          <li>describe what happens between <code>java -jar</code> and the first HTTP response;</li>
+          <li>explain what a <button class="term" data-term="migration">migration</button> is and why it needs a version;</li>
+          <li>tell a Dockerfile from a Compose file, and a <button class="term" data-term="multi-stage">multi-stage build</button> from a single-stage one;</li>
+          <li>explain why the API openly reports that payments are disabled.</li>
+        </ul>
+      </div>
+
+      <h2 id="c1-model" data-short="Mental model">Mental model</h2>
+      <p>An HTTP API is a long-running process that listens on a port, maps each request to a method, and writes a response. Spring Boot assembles that process for you: it scans your code for components, wires them together with <button class="term" data-term="di">dependency injection</button>, and starts an embedded Tomcat web server.</p>
+      <p>Around that process sit three tools you will use in every chapter:</p>
+      <ul>
+        <li><b>Docker</b> packages the application with its Java runtime into an image, so it runs the same everywhere.</li>
+        <li><b>Docker Compose</b> starts that image next to PostgreSQL, wires up the network and environment variables, and waits until the database is healthy.</li>
+        <li><b><button class="term" data-term="flyway">Flyway</button></b> keeps the database schema under version control, so every environment has the same tables.</li>
+      </ul>
+      <div class="callout"><p><b>Go deeper.</b> New to containers, the JVM or Spring? <a href="hood.html#h-stack">Under the hood</a> opens every layer of the running system with recorded output: what's inside the JAR, which user the process runs as, how the API finds the database by name.</p></div>
+    </div>
+
+    <div class="prose"><h2 id="c1-startup" data-short="Startup sequence">What happens before the first request</h2></div>
+    <div class="fig tracer">
+      <div class="fig-head"><h4>Startup sequence</h4><div class="chips" aria-label="Scenario"></div></div>
+      <div class="fig-body stage">
+        <ol class="lanes"></ol>
+        <div class="side">
+          <div><span class="label">Command</span><pre class="printout request"></pre></div>
+          <div><span class="label">Log (abridged)</span><pre class="printout" aria-live="polite"></pre></div>
+          <div class="result" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="controls"><div class="row"><button class="btn" type="button">Play</button><button class="btn ghost" type="button">Step</button><button class="btn ghost" type="button">Reset</button></div><span class="progress"></span></div>
+      <script type="application/json">
+      {
+        "lanes": [
+          {"name": "JVM", "detail": "java -jar app.jar"},
+          {"name": "Spring context", "detail": "@SpringBootApplication"},
+          {"name": "Tomcat initialized", "detail": "port not open yet"},
+          {"name": "HikariCP", "detail": "connection pool"},
+          {"name": "Flyway", "detail": "db/migration/*.sql"},
+          {"name": "Hibernate", "detail": "ddl-auto: validate"},
+          {"name": "Tomcat started", "detail": ":8080 open"}
+        ],
+        "scenarios": [
+          {"label": "Normal start", "request": "$ docker compose up\n# container runs: java -jar /app/app.jar (as user 'app')",
+           "steps": [
+             {"lane": 0, "text": "The JVM loads the executable JAR built by Maven and calls PaymentApiApplication.main().", "log": "Starting PaymentApiApplication v0.1.0-SNAPSHOT using Java 21.0.12.1 with PID 1 (/app/app.jar started by app in /app)",
+              "deep": "The JAR's manifest names <code>Main-Class: org.springframework.boot.loader.launch.JarLauncher</code>, so Spring Boot's launcher starts first. It makes the libraries nested inside the JAR loadable, then calls our <code>main</code>.\n\n<code>PID 1</code>: Java is the container's first process. <code>started by app</code>: it runs as the unprivileged user from the Dockerfile. Explore these layers in <a href=\"hood.html#h-stack\">Under the hood</a>."},
+             {"lane": 1, "text": "Spring reads application.yml, scans dev.p2plab.payments for components and wires them together.", "log": "No active profile set, falling back to 1 default profile: \"default\"",
+              "deep": "Spring creates its container and writes a recipe for each class annotated <code>@RestController</code>, <code>@Service</code>, <code>@Repository</code> or <code>@Configuration</code>. Auto-configuration then adds recipes for the libraries it finds: Tomcat, Jackson, HikariCP, Flyway, Hibernate. Objects are built later, dependencies first.\n\n<b>Profiles</b> are named sets of configuration, such as <code>test</code> or <code>prod</code>. We use none yet."},
+             {"lane": 2, "text": "Tomcat is created and reserves port 8080, but doesn't accept connections yet.", "log": "Tomcat initialized with port 8080 (http)\nStarting Servlet engine: [Apache Tomcat/10.1.40]",
+              "deep": "Tomcat is a library inside this JVM. It is created early so that the web parts of Spring have something to register with. Requests are refused until the last step."},
+             {"lane": 3, "text": "The pool opens its first connection to PostgreSQL.", "log": "HikariPool-1 - Starting...\nHikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@5f45bc8e\nHikariPool-1 - Start completed.",
+              "deep": "HikariCP keeps database connections open and lends them out, because opening one per request would be slow. The connection goes to <code>postgres:5432</code>: Compose's network resolves the service name <code>postgres</code> to the database container."},
+             {"lane": 4, "text": "Flyway compares db/migration with the flyway_schema_history table. New scripts run in version order.", "log": "Successfully validated 2 migrations (execution time 00:00.017s)\nCurrent version of schema \"public\": 2\nSchema \"public\" is up to date. No migration necessary.",
+              "deep": "<b>Validated</b> means each applied file's checksum still matches the history table. <b>Up to date</b> means there is no file with a version above 2. On a brand-new database, Flyway would run V1 and V2 here."},
+             {"lane": 5, "text": "Hibernate checks every @Entity against the real tables. It never changes the schema; Flyway owns that.", "log": "HHH000412: Hibernate ORM core version 6.6.13.Final\nInitialized JPA EntityManagerFactory for persistence unit 'default'",
+              "deep": "Hibernate is deliberately built after Flyway: Spring's dependency graph says <code>entityManagerFactory</code> depends on <code>flywayInitializer</code>. Validating before migrating would compare the entities against an old schema."},
+             {"lane": 6, "text": "Every component was built, so Tomcat starts listening. The app is ready.", "log": "Tomcat started on port 8080 (http) with context path '/'\nStarted PaymentApiApplication in 3.35 seconds (process running for 3.718)",
+              "deep": "From now on, Actuator's <code>/actuator/health</code> reports <code>UP</code>, including a database check. A request can never reach a half-built application, because the port opens last."}
+           ],
+           "result": {"ok": true, "status": "UP", "summary": "Ready for requests. Payments are still disabled."}},
+          {"label": "PostgreSQL stopped", "request": "$ docker compose stop postgres\n$ docker compose restart payment-api",
+           "steps": [
+             {"lane": 0, "text": "The JVM starts normally. Building the image never needed a database.", "log": "Starting PaymentApiApplication v0.1.0-SNAPSHOT using Java 21.0.12.1 with PID 1 (/app/app.jar started by app in /app)"},
+             {"lane": 1, "text": "Spring begins wiring components. The DataSource is configured but not yet used.", "log": "No active profile set, falling back to 1 default profile: \"default\""},
+             {"lane": 2, "text": "Tomcat is initialized as usual.", "log": "Tomcat initialized with port 8080 (http)"},
+             {"lane": 3, "text": "The pool tries to open its first connection, on Flyway's behalf.", "log": "HikariPool-1 - Starting..."},
+             {"lane": 4, "fail": true, "text": "Flyway needs a connection before anything else can run, and there is no database to connect to. Startup aborts here.", "log": "Application run failed\nError creating bean with name 'entityManagerFactory' …\n  Failed to initialize dependency 'flywayInitializer' …\nCaused by: …BeanCreationException: Error creating bean with name 'flywayInitializer' …\nCaused by: org.flywaydb.core.internal.exception.FlywaySqlException: Unable to obtain connection from database: The connection attempt failed.\nCaused by: org.postgresql.util.PSQLException: The connection attempt failed.\nCaused by: java.net.UnknownHostException: postgres",
+              "deep": "Read a cause chain from the <b>bottom</b>. Each layer wraps the error from the layer beneath: Spring couldn't build <code>entityManagerFactory</code> because <code>flywayInitializer</code> failed, because Flyway got no connection, because the driver's attempt failed, because <b>the hostname <code>postgres</code> doesn't exist</b>.\n\nIt's not \"connection refused\": a stopped container's name is removed from the Compose network's DNS, so there's no address to try at all."}
+           ],
+           "result": {"ok": false, "status": "Exited (1)", "summary": "Tomcat never started, so nothing listens on 8080. The image is fine; the runtime dependency is missing."}},
+          {"label": "Entity doesn't match schema", "request": "# AccountEntity maps display_name as \"name\"\n$ docker compose up --build",
+           "steps": [
+             {"lane": 0, "text": "The JVM starts.", "log": "Starting PaymentApiApplication v0.1.0-SNAPSHOT using Java 21.0.12.1"},
+             {"lane": 1, "text": "Spring wires components."},
+             {"lane": 3, "text": "The pool connects.", "log": "HikariPool-1 - Start completed."},
+             {"lane": 4, "text": "Flyway finds the schema up to date. The SQL is correct.", "log": "Schema \"public\" is up to date. No migration necessary."},
+             {"lane": 5, "fail": true, "text": "Hibernate looks for a column named name in table account and does not find one. It refuses to start rather than fail later on the first query.", "log": "Failed to initialize JPA EntityManagerFactory: [PersistenceUnit: default]\nUnable to build Hibernate SessionFactory; nested exception is\norg.hibernate.tool.schema.spi.SchemaManagementException:\nSchema-validation: missing column [name] in table [account]",
+              "deep": "Recorded by changing <code>@Column(name = \"display_name\")</code> to <code>\"name\"</code> in a copy of the code. With <code>ddl-auto: update</code>, Hibernate would instead have added an empty <code>name</code> column: an unreviewed schema change in whatever database it was pointed at."}
+           ],
+           "result": {"ok": false, "status": "Exited (1)", "summary": "Mapping mistakes are caught at startup, not by a customer. (You will try this in Chapter 2, exercise 3.)"}}
+        ]
+      }
+      </script>
+    </div>
+
+    <div class="prose">
+      <h2 id="c1-code" data-short="Code tour">Code tour</h2>
+      <p>Four files carry the whole chapter. Step through each one with the arrows, or click a highlighted line number.</p>
+    </div>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/PaymentApiApplication.java">
+      <div class="fig-head"><h4>The entry point</h4><span class="path">apps/payment-api/src/main/java/dev/p2plab/payments/PaymentApiApplication.java</span></div>
+<pre class="src">
+@SpringBootApplication
+public class PaymentApiApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(PaymentApiApplication.class, args);
+    }
+}
+</pre>
+      <ol class="notes">
+        <li data-at="@SpringBootApplication"><code>@SpringBootApplication</code> turns on three things: configuration from this class, auto-configuration of libraries found on the classpath (web, JPA, Flyway, Actuator), and component scanning of this package and everything below it.</li>
+        <li data-at="SpringApplication.run"><code>SpringApplication.run</code> builds the application context, runs Flyway, starts Tomcat, and returns only once the app is ready. Everything in the startup trace above happens inside this one call.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="java" data-source="apps/payment-api/src/main/java/dev/p2plab/payments/api/CapabilitiesController.java">
+      <div class="fig-head"><h4>A safe first endpoint</h4><span class="path">apps/payment-api/src/main/java/dev/p2plab/payments/api/CapabilitiesController.java</span></div>
+<pre class="src">
+@RestController
+@RequestMapping("/api/v1/payments")
+public class CapabilitiesController {
+    @GetMapping("/capabilities")
+    public Map&lt;String, Object&gt; capabilities() {
+        return Map.of("service", "p2p-payments-lab", "paymentProcessingEnabled", false, "accountsEnabled", true,
+            "ledgerEnabled", true, "chapter", 3);
+    }
+}
+</pre>
+      <ol class="notes">
+        <li data-at="@RestController"><code>@RestController</code> marks this class as an HTTP handler whose return values are written straight to the response body as JSON.</li>
+        <li data-at="@RequestMapping" data-span="4">The class-level <code>/api/v1/payments</code> and method-level <code>/capabilities</code> combine into <code>GET /api/v1/payments/capabilities</code>. The <code>v1</code> lets a future breaking change live at <code>v2</code> without breaking existing clients.</li>
+        <li data-at="paymentProcessingEnabled"><code>paymentProcessingEnabled: false</code> is deliberate. A client or operator that sees a healthy service must not conclude that it can move money. The flag changes only when a chapter actually implements payments. Chapter 3 added an internal ledger (<code>ledgerEnabled: true</code>) but still no payment API, so it stays <code>false</code>.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="yaml" data-source="apps/payment-api/src/main/resources/application.yml">
+      <div class="fig-head"><h4>Configuration</h4><span class="path">apps/payment-api/src/main/resources/application.yml</span></div>
+<pre class="src">
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/p2p_lab}
+    username: ${DB_USERNAME:p2p_lab}
+    password: ${DB_PASSWORD:local_dev_only}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+</pre>
+      <ol class="notes">
+        <li data-at="url:" data-span="3"><code>${DB_URL:default}</code> reads an environment variable and falls back to a local default. Compose sets <code>DB_URL</code> to the <code>postgres</code> service. The password is a throwaway local value; real secrets never go in the repository.</li>
+        <li data-at="ddl-auto: validate"><code>validate</code> means Hibernate only checks that entity classes match the tables. It never creates or alters them. Schema changes go through Flyway migrations, which are reviewed and versioned.</li>
+      </ol>
+    </figure>
+
+    <figure class="fig code" data-lang="docker" data-source="apps/payment-api/Dockerfile">
+      <div class="fig-head"><h4>Two-stage image</h4><span class="path">apps/payment-api/Dockerfile</span></div>
+<pre class="src">
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /workspace
+COPY pom.xml .
+RUN mvn -B -q dependency:go-offline
+COPY src ./src
+RUN mvn -B -q -DskipTests package
+
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+RUN groupadd --system app &amp;&amp; useradd --system --gid app app
+COPY --from=build --chown=app:app /workspace/target/payment-api-0.1.0-SNAPSHOT.jar /app/app.jar
+USER app
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+</pre>
+      <ol class="notes">
+        <li data-at="AS build">Stage one, named <code>build</code>, has Maven and a full JDK. It exists only to produce the JAR.</li>
+        <li data-at="COPY pom.xml" data-span="2">Copying <code>pom.xml</code> alone first lets Docker cache downloaded dependencies. Editing Java code later reuses this layer instead of downloading the internet again.</li>
+        <li data-at="-DskipTests">Tests are skipped here because CI runs them separately with a real database. The image build should not need Docker-in-Docker.</li>
+        <li data-at="FROM eclipse-temurin:21-jre">Stage two starts fresh from a JRE-only image. No Maven, no compiler, no source code: less to download and less for an attacker to use.</li>
+        <li data-at="groupadd" data-span="4">Only the JAR is copied across. The process runs as an unprivileged <code>app</code> user, so a compromised app cannot act as root inside the container.</li>
+      </ol>
+    </figure>
+
+    <div class="prose"><h2 id="c1-request" data-short="Request trace">Following one request</h2></div>
+    <div class="fig tracer">
+      <div class="fig-head"><h4>HTTP request lifecycle</h4><div class="chips" aria-label="Scenario"></div></div>
+      <div class="fig-body stage">
+        <ol class="lanes"></ol>
+        <div class="side">
+          <div><span class="label">Request</span><pre class="printout request"></pre></div>
+          <div><span class="label">What the server sees</span><pre class="printout" aria-live="polite"></pre></div>
+          <div class="result" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="controls"><div class="row"><button class="btn" type="button">Play</button><button class="btn ghost" type="button">Step</button><button class="btn ghost" type="button">Reset</button></div><span class="progress"></span></div>
+      <script type="application/json">
+      {
+        "lanes": [
+          {"name": "Client", "detail": "curl"},
+          {"name": "Tomcat", "detail": "embedded web server"},
+          {"name": "DispatcherServlet", "detail": "Spring MVC router"},
+          {"name": "CapabilitiesController", "detail": "your code"},
+          {"name": "Jackson", "detail": "object → JSON"}
+        ],
+        "scenarios": [
+          {"label": "GET capabilities", "request": "GET /api/v1/payments/capabilities",
+           "steps": [
+             {"lane": 0, "text": "curl opens a TCP connection to port 8080 and sends the request line and headers.",
+              "deep": "Docker Desktop forwards <code>localhost:8080</code> on your computer into the container, because <code>compose.yaml</code> maps <code>\"8080:8080\"</code>. What travels is plain text: <code>GET /api/v1/payments/capabilities HTTP/1.1</code>, a few headers, then a blank line."},
+             {"lane": 1, "text": "Tomcat parses the bytes into an HttpServletRequest and hands it to a worker thread.",
+              "deep": "Tomcat keeps a pool of worker <button class=\"term\" data-term=\"thread\">threads</button> and runs each request on one of them, from start to finish. Every log line of this request is tagged with that thread's name, here <code>nio-8080-exec-1</code>."},
+             {"lane": 2, "text": "Spring looks up a handler: GET + /api/v1/payments/capabilities matches capabilities().", "log": "[nio-8080-exec-1] DispatcherServlet : GET \"/api/v1/payments/capabilities\", parameters={}\n[nio-8080-exec-1] RequestMappingHandlerMapping : Mapped to dev.p2plab.payments.api.CapabilitiesController#capabilities()",
+              "deep": "<code>DispatcherServlet</code> is the only servlet Tomcat knows about; every request goes through it. It consults a route table built at startup from every <code>@GetMapping</code>, <code>@PostMapping</code> and <code>@RequestMapping</code>.\n\nOn the very first request after startup, the log also shows <code>Initializing Servlet 'dispatcherServlet'</code>: Spring finishes setting it up lazily."},
+             {"lane": 3, "text": "The method builds a Map. No database call, no side effects.",
+              "deep": "The controller is a Spring <button class=\"term\" data-term=\"bean\">bean</button>: one object, created at startup and shared by every request. <code>Map.of</code> builds an immutable map, so sharing it is safe too."},
+             {"lane": 4, "text": "Jackson serializes the Map to JSON and sets Content-Type: application/json.", "log": "[nio-8080-exec-1] RequestResponseBodyMethodProcessor : Using 'application/json', given [*/*] and supported [application/json, application/*+json]\n[nio-8080-exec-1] RequestResponseBodyMethodProcessor : Writing [{paymentProcessingEnabled=false, chapter=2, service=p2p-payments-lab, accountsEnabled=true}]\n[nio-8080-exec-1] DispatcherServlet : Completed 200 OK",
+              "deep": "<b>Content negotiation</b>: curl sent <code>Accept: */*</code> (anything), and the method can produce JSON, so JSON it is. <code>Map.of</code> has no defined order, which is why the fields come out in a different order from the source code. JSON objects are unordered, so clients must not depend on it."},
+             {"lane": 0, "text": "curl prints the body."}
+           ],
+           "result": {"ok": true, "status": "200 OK", "summary": "Discovery works, and it says payments are disabled."}},
+          {"label": "POST /api/v1/payments", "request": "POST /api/v1/payments",
+           "steps": [
+             {"lane": 0, "text": "Someone tries to send a payment."},
+             {"lane": 1, "text": "Tomcat parses the request as usual."},
+             {"lane": 2, "fail": true, "text": "No controller maps this path. Spring falls back to its static-file handler, which finds nothing either.", "log": "[nio-8080-exec-3] DispatcherServlet : POST \"/api/v1/payments\", parameters={}\n[nio-8080-exec-3] ExceptionHandlerExceptionResolver : Resolved [org.springframework.web.servlet.resource.NoResourceFoundException: No static resource api/v1/payments.]\n[nio-8080-exec-3] DispatcherServlet : Completed 404 NOT_FOUND",
+              "deep": "Note there is no <code>Mapped to …</code> line. When no controller matches, Spring tries to serve a static file (images, HTML) from the classpath, finds none, and throws <code>NoResourceFoundException</code>. That's why the 404 detail talks about a \"static resource\"."},
+             {"lane": 0, "text": "The client gets a problem response instead of a payment."}
+           ],
+           "result": {"ok": false, "status": "404 Not Found", "summary": "There is no payments endpoint yet, by design."}},
+          {"label": "POST capabilities", "request": "POST /api/v1/payments/capabilities",
+           "steps": [
+             {"lane": 0, "text": "The right path with the wrong method."},
+             {"lane": 1, "text": "Tomcat parses the request."},
+             {"lane": 2, "fail": true, "text": "The path is mapped, but only for GET. Spring answers 405 and lists what is allowed.", "log": "[nio-8080-exec-5] DispatcherServlet : POST \"/api/v1/payments/capabilities\", parameters={}\n[nio-8080-exec-5] PageNotFound : Request method 'POST' is not supported\n[nio-8080-exec-5] DispatcherServlet : Completed 405 METHOD_NOT_ALLOWED",
+              "deep": "The route table knows this path, but only with <code>GET</code>. Spring therefore answers 405 rather than 404, and adds the header <code>Allow: GET</code> (recorded with <code>curl -i</code>)."},
+             {"lane": 0, "text": "The Allow header tells the client which method would have worked."}
+           ],
+           "result": {"ok": false, "status": "405 Method Not Allowed", "summary": "404 means no such resource; 405 means the resource exists but not for that verb."}}
+        ]
+      }
+      </script>
+    </div>
+
+    <div class="prose">
+      <h2 id="c1-failure" data-short="Failure lab">Failure laboratory</h2>
+      <p>A Docker image that builds is not a service that starts. Building needs only Maven and source code; starting needs a reachable database, valid configuration, and a schema that matches the code. Try the <b>PostgreSQL stopped</b> scenario in the startup trace above, then reproduce it for real:</p>
+      <div class="cmd"><pre>docker compose up -d
+docker compose stop postgres
+docker compose restart payment-api
+docker compose logs payment-api --tail 30
+docker compose start postgres
+docker compose restart payment-api</pre></div>
+
+      <h2 id="c1-run" data-short="Run it yourself">Run it yourself</h2>
+      <div class="cmd"><pre>docker compose up --build
+curl http://localhost:8080/actuator/health
+curl http://localhost:8080/api/v1/payments/capabilities</pre></div>
+      <p>On Windows PowerShell, type <code>curl.exe</code>; plain <code>curl</code> there is an alias for a different command.</p>
+
+      <h2 id="c1-exercises" data-short="Exercises">Exercises</h2>
+      <details class="reveal predict"><summary>What does <code>curl -X POST http://localhost:8080/api/v1/payments</code> return?</summary><div><p><b>404 Not Found</b> with a problem body: <code>"detail":"No static resource api/v1/payments."</code>. Nothing maps that path yet. Compare with <code>POST /api/v1/payments/capabilities</code>, which returns <b>405</b> because that path exists for GET.</p></div></details>
+      <details class="reveal"><summary>Explain the difference between the Dockerfile and compose.yaml</summary><div><p>The Dockerfile describes how to build <em>one image</em>. <code>compose.yaml</code> describes how to <em>run several containers together</em>: which images, which environment variables, which ports, and in what order (the API waits for PostgreSQL's health check).</p></div></details>
+      <details class="reveal"><summary>Which file controls the database schema?</summary><div><p>The SQL files in <code>apps/payment-api/src/main/resources/db/migration/</code>, applied by Flyway. Not Hibernate: <code>ddl-auto: validate</code> only checks.</p></div></details>
+      <details class="reveal"><summary>Add a safe field to the capabilities response</summary><div><p>Add for example <code>"currency", "USD"</code> to the <code>Map.of(...)</code>. The existing <code>CapabilitiesControllerTest</code> still passes, because it checks specific fields, not the whole body. Add an assertion for your new field, run <code>mvn verify</code>, and update this book's code excerpt. The CI snippet check fails if you forget.</p></div></details>
+    </div>
+
+    <div class="prose">
+      <h2 id="c1-quiz" data-short="Quiz">Check your understanding</h2>
+    </div>
+    <div class="quiz" data-quiz="ch-01">
+      <div class="q" data-answer="b">
+        <p class="q-text">What does <code>docker compose up</code> do that <code>docker build</code> alone does not?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Compiles the Java code</button></li>
+          <li><button data-opt="b">Starts the API together with PostgreSQL, with networking, environment variables and start order</button></li>
+          <li><button data-opt="c">Runs the unit tests</button></li>
+          <li><button data-opt="d">Publishes the image to a registry</button></li>
+        </ul>
+        <p class="q-why" hidden>Compose runs a set of containers as one system. Compiling happens inside the Dockerfile's build stage, and tests run in CI.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">Why does every Flyway migration carry a version number?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">So Hibernate can generate the tables</button></li>
+          <li><button data-opt="b">So migrations can be edited safely after release</button></li>
+          <li><button data-opt="c">So each change is applied exactly once, in order, and every database can say which version it is at</button></li>
+          <li><button data-opt="d">Because PostgreSQL requires it</button></li>
+        </ul>
+        <p class="q-why" hidden>Flyway records applied versions in <code>flyway_schema_history</code>. Editing an applied migration is exactly what versioning forbids: Flyway detects the changed checksum and refuses to start.</p>
+      </div>
+      <div class="q" data-answer="a">
+        <p class="q-text">The image built without errors, but the container exits seconds after starting. What is the most likely cause?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">A runtime dependency, such as the database, is unreachable or misconfigured</button></li>
+          <li><button data-opt="b">The Java code did not compile</button></li>
+          <li><button data-opt="c">Port 8080 is missing from the Dockerfile</button></li>
+          <li><button data-opt="d">Tests were skipped during the build</button></li>
+        </ul>
+        <p class="q-why" hidden>A compile error would have failed the build. Startup needs things the build never touched: the database, configuration and a matching schema. <code>EXPOSE</code> is documentation and does not stop a process from starting.</p>
+      </div>
+      <div class="q" data-answer="d">
+        <p class="q-text">What is the main benefit of the second <code>FROM</code> stage in the Dockerfile?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">It makes Maven builds faster</button></li>
+          <li><button data-opt="b">It runs the tests in isolation</button></li>
+          <li><button data-opt="c">It lets the image run without a JVM</button></li>
+          <li><button data-opt="d">The final image carries only a JRE and the JAR, runs as a non-root user, and leaves build tools behind</button></li>
+        </ul>
+        <p class="q-why" hidden>Smaller images download faster and give an attacker fewer tools. The dependency cache layer is what speeds up builds, not the second stage.</p>
+      </div>
+      <div class="q" data-answer="b">
+        <p class="q-text">Why does the capabilities endpoint say <code>paymentProcessingEnabled: false</code> instead of omitting the field?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Jackson cannot serialize a missing field</button></li>
+          <li><button data-opt="b">So nobody mistakes a healthy service for one that can move money</button></li>
+          <li><button data-opt="c">It turns off the payment endpoints</button></li>
+          <li><button data-opt="d">It is required by the HTTP standard</button></li>
+        </ul>
+        <p class="q-why" hidden>The flag is informational. There are no payment endpoints to turn off. Its job is to make technical readiness and business readiness visibly different.</p>
+      </div>
+      <div class="q" data-answer="c">
+        <p class="q-text">With <code>ddl-auto: validate</code>, what does Hibernate do at startup?</p>
+        <ul class="q-opts">
+          <li><button data-opt="a">Creates missing tables</button></li>
+          <li><button data-opt="b">Drops and recreates the schema</button></li>
+          <li><button data-opt="c">Checks that entity mappings match the existing tables and refuses to start if they don't</button></li>
+          <li><button data-opt="d">Runs the Flyway migrations</button></li>
+        </ul>
+        <p class="q-why" hidden>Flyway changes the schema; Hibernate only verifies it. Keeping those jobs separate means every schema change is a reviewed SQL file.</p>
+      </div>
+    </div>
+
+    <nav class="chapter-nav prose" aria-label="Chapter navigation">
+      <a href="index.html"><small>Back</small>Contents</a>
+      <a class="next" href="ch-02.html"><small>Next</small>Chapter 2 · Accounts</a>
+    </nav>
+  </section>
+  </main>
+</div>
+
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-docker.min.js"></script>
+<script src="glossary.js"></script>
+<script src="book.js"></script>
+</body>
+</html>

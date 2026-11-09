@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Glossary · P2P Payments Lab Textbook</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<link rel="stylesheet" href="book.css">
+</head>
+<body>
+<!--
+  The interactive edition of docs/chapters/*.md.
+  Code excerpts inside <figure class="code"> must match the real source file named in data-source;
+  docs/book/tools/check-snippets.mjs enforces this in CI. Edit both in the same commit.
+-->
+<div class="topbar">
+  <b>P2P Payments Lab</b>
+  <button class="btn ghost" type="button" aria-expanded="false" aria-controls="rail">Contents</button>
+</div>
+<div class="shell">
+  <nav class="rail" id="rail" aria-label="Book contents">
+    <a class="brand" href="index.html"><span>Living textbook</span><b>P2P Payments Lab</b></a>
+    <ul class="toc">
+      <li><a href="index.html"><span class="no">00</span><span>How to use this book</span></a></li>
+      <li><a href="ch-01.html"><span class="no">01</span><span>Runnable service</span><span class="score" data-score="ch-01" data-total="6"></span></a></li>
+      <li><a href="ch-02.html"><span class="no">02</span><span>Accounts</span><span class="score" data-score="ch-02" data-total="10"></span></a></li>
+      <li><a href="hood.html"><span class="no">UH</span><span>Under the hood</span><span class="score" data-score="hood" data-total="10"></span></a></li>
+      <li><a href="ch-03.html"><span class="no">03</span><span>Ledger and concurrency</span><span class="score" data-score="ch-03" data-total="10"></span></a></li>
+      <li><a href="glossary.html"><span class="no">Gl</span><span>Glossary</span></a></li>
+    </ul>
+    <ul class="toc pending" aria-label="Planned chapters">
+      <li><span class="toc-planned">04 · Payments and idempotency</span></li>
+      <li><span class="toc-planned">05 · Authentication</span></li>
+      <li><span class="toc-planned">06 · Kafka and the outbox</span></li>
+    </ul>
+    <div class="rail-foot">
+      <div class="theme-toggle" role="group" aria-label="Theme">
+        <button type="button" data-mode="system">Auto</button>
+        <button type="button" data-mode="light">Light</button>
+        <button type="button" data-mode="dark">Dark</button>
+      </div>
+      <div>Fictional platform. No real money, banks or rails. Quiz answers are saved only in this browser.</div>
+    </div>
+  </nav>
+
+  <main>
+  <!-- ================================================================ GLOSSARY -->
+  <section class="view" data-view="glossary">
+    <div class="prose">
+      <p class="eyebrow">Reference</p>
+      <h1>Glossary</h1>
+      <p class="lede">Every underlined term in the book links here. Definitions describe how this project uses the word.</p>
+      <dl class="glossary" data-glossary></dl>
+    </div>
+  </section>
+  </main>
+</div>
+
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-java.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-docker.min.js"></script>
+<script src="glossary.js"></script>
+<script src="book.js"></script>
+</body>
+</html>
